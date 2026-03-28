@@ -1,0 +1,10 @@
+{
+  "description": "Example explicit universe used for dry-run planning when no live token or local security_master dataset is available.",
+  "symbols": [
+    "000001",
+    "000002",
+    "300001",
+    "600000",
+    "600519"
+  ]
+}

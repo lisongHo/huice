@@ -1,0 +1,2 @@
+"""Streamlit workbench app package."""
+

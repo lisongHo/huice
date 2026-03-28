@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab"
+version = "0.1.0"
+description = "Single-user A-share minute backtest workbench"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "duckdb>=1.2.2",
+  "pandas>=2.2.3",
+  "plotly>=6.0.1",
+  "pyarrow>=20.0.0",
+  "pydantic>=2.11.2",
+  "streamlit>=1.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+]
+
+[tool.setuptools]
+packages = ["quantlab"]
+
+[tool.setuptools.package-dir]
+quantlab = "quantlab"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

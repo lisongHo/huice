@@ -1,0 +1,23 @@
+[tushare]
+# Prefer setting TUSHARE_TOKEN in the environment for real runs.
+token = ""
+api_url = "http://api.tushare.pro"
+timeout_seconds = 30
+minute_freq = "1min"
+
+# Tushare historical stock minute requests are capped at 8000 rows per call and
+# only allow one security per request, so sync windows stay intentionally small.
+minute_chunk_days = 20
+refresh_lookback_open_days = 5
+maintenance_lookback_open_days = 10
+
+[universe]
+# Universe is restricted to mainland A-share stock prefixes only.
+prefixes = ["00", "30", "60"]
+
+# Either provide explicit symbols here...
+symbols = ["000001", "300001", "600000"]
+
+# ...or point at a JSON file with either `["000001", "..."]` or
+# `{"symbols": ["000001", "..."]}`.
+# file = "configs/universe.example.json"

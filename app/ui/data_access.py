@@ -1,0 +1,739 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import pandas as pd
+
+from quantlab.config import AppPaths
+from quantlab.registry import bootstrap_registry
+from quantlab.schemas import BacktestRunConfig, RunArtifactManifest, RunStatus
+from quantlab.storage import ARTIFACT_FILE_NAMES, run_dir
+from quantlab.strategies.builtin import BUILTIN_STRATEGY_NAME, default_strategy_params
+from reports import ScanBatchResult
+
+from app.ui.workbench import app_root, build_app_paths, build_shared_paths, repo_root
+
+
+def workspace_root() -> Path:
+    return repo_root()
+
+
+def get_app_paths(root: Path | None = None) -> AppPaths:
+    return build_app_paths(root)
+
+
+def get_shared_paths(root: Path | None = None) -> AppPaths:
+    return build_shared_paths(root)
+
+
+def get_browse_paths(root: Path | None = None) -> list[tuple[str, AppPaths]]:
+    app_paths = get_app_paths(root)
+    shared_paths = get_shared_paths(root)
+    return [
+        ("app", app_paths),
+        ("shared", shared_paths),
+    ]
+
+
+def _read_json_file(path: Path) -> dict[str, Any] | list[dict[str, Any]] | None:
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _resolve_path(raw_path: str | Path, root: Path) -> Path:
+    path = Path(raw_path)
+    return path if path.is_absolute() else root / path
+
+
+def _read_frame(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix == ".csv":
+        return pd.read_csv(path)
+    if path.suffix == ".json":
+        payload = _read_json_file(path)
+        if payload is None:
+            return pd.DataFrame()
+        if isinstance(payload, list):
+            return pd.DataFrame(payload)
+        return pd.DataFrame([payload])
+    return pd.DataFrame()
+
+
+@dataclass(slots=True)
+class TemplateSummary:
+    template_name: str
+    strategy_name: str
+    execution_mode: str
+    start_date: str | None
+    end_date: str | None
+    source: str
+    notes: str
+    config: BacktestRunConfig | None = None
+
+
+@dataclass(slots=True)
+class RunSummary:
+    run_id: str
+    strategy_name: str
+    start_date: str
+    end_date: str
+    execution_mode: str
+    status: RunStatus | str
+    created_at: datetime | None
+    completed_at: datetime | None
+    artifacts_dir: str
+    metrics_path: str | None
+    total_return_pct: float | None = None
+    max_drawdown_pct: float | None = None
+    trade_count: int | None = None
+    source_label: str = "app"
+
+
+@dataclass(slots=True)
+class ValidationSummary:
+    status_counts: pd.DataFrame
+    severity_counts: pd.DataFrame
+    recent_results: pd.DataFrame
+
+
+@dataclass(slots=True)
+class ValidationResultItem:
+    validation_run_id: str
+    dataset_name: str
+    check_name: str
+    severity: str
+    status: str
+    details: str
+
+
+@dataclass(slots=True)
+class FileManifestSummary:
+    dataset_name: str
+    file_count: int
+    row_count: int | None
+
+
+@dataclass(slots=True)
+class ProviderCapabilitySummary:
+    provider_name: str
+    supports_minute_bars: bool
+    supports_security_status_history: bool
+    supports_price_limits: bool
+    supports_suspensions: bool
+
+
+@dataclass(slots=True)
+class DataHealthSnapshot:
+    note: str
+    validation_summary: ValidationSummary | None
+    validation_results: list[ValidationResultItem]
+    file_manifest: list[FileManifestSummary]
+    provider_capabilities: list[ProviderCapabilitySummary]
+
+
+@dataclass(slots=True)
+class ScanBatchSummary:
+    scan_batch_id: str
+    strategy_name: str
+    created_at: datetime | None
+    run_count: int
+    parameter_names: list[str]
+    best_run_id: str | None
+    best_return_pct: float | None
+    source_label: str
+    result_path: str
+
+
+@dataclass(slots=True)
+class ExperimentLibraryEntry:
+    label: str
+    path: str
+    kind: str
+    modified_at: datetime | None
+    item_count: int | None
+
+
+@dataclass(slots=True)
+class HomePageData:
+    recent_runs: list[RunSummary]
+    validation_results: list[ValidationResultItem]
+    validation_summary: ValidationSummary | None
+    default_template: TemplateSummary
+    latest_saved_template: TemplateSummary | None
+    data_health_note: str
+    app_run_count: int
+    shared_run_count: int
+    scan_batches: list[ScanBatchSummary]
+    experiment_library_entries: list[ExperimentLibraryEntry]
+    app_paths: AppPaths
+    shared_paths: AppPaths
+
+
+@dataclass(slots=True)
+class RunSubmission:
+    config: BacktestRunConfig
+    run_requested: bool
+    payload: dict[str, Any]
+    summary: dict[str, Any]
+
+
+@dataclass(slots=True)
+class RunArtifacts:
+    run_id: str
+    manifest: RunArtifactManifest | None
+    config: BacktestRunConfig | None
+    metrics: dict[str, Any] | None
+    equity_curve: pd.DataFrame
+    drawdown_curve: pd.DataFrame
+    trades: pd.DataFrame
+    annual_returns: pd.DataFrame
+    source_label: str = "app"
+
+
+def default_template_summary() -> TemplateSummary:
+    params = default_strategy_params()
+    return TemplateSummary(
+        template_name="v0.1 default builtin",
+        strategy_name=BUILTIN_STRATEGY_NAME,
+        execution_mode="last_5m_vwap",
+        start_date=None,
+        end_date=None,
+        source="builtin defaults",
+        notes=(
+            "Default single-strategy template for near-close A-share minute research. "
+            "Set the date window on the Single Backtest page before launching."
+        ),
+        config=BacktestRunConfig(
+            strategy_name=BUILTIN_STRATEGY_NAME,
+            start_date="2022-01-01",
+            end_date="2022-01-02",
+            strategy_params=params,
+        ),
+    )
+
+
+def load_latest_saved_template(paths: AppPaths | None = None, root: Path | None = None) -> TemplateSummary | None:
+    runs = load_recent_runs(limit=25, paths=paths) if paths is not None else load_recent_runs_catalog(limit=25, root=root)
+    for summary in runs:
+        if str(summary.status).lower() != "completed":
+            continue
+        config = (
+            load_run_config(summary.run_id, paths=paths)
+            if paths is not None
+            else load_run_artifacts_from_sources(summary.run_id, root=root).config
+        )
+        if config is None:
+            continue
+        return TemplateSummary(
+            template_name=f"saved from run {summary.run_id[:8]}",
+            strategy_name=config.strategy_name,
+            execution_mode=config.execution.mode.value,
+            start_date=str(config.start_date),
+            end_date=str(config.end_date),
+            source=f"latest completed {summary.source_label} run",
+            notes="Most recent completed run config that can be reused as a starting point.",
+            config=config,
+        )
+    return None
+
+
+def load_run_config(run_id: str, paths: AppPaths | None = None) -> BacktestRunConfig | None:
+    paths = paths or get_app_paths()
+    config_path = run_dir(paths, run_id) / ARTIFACT_FILE_NAMES["config"]
+    payload = _read_json_file(config_path)
+    if payload is None or not isinstance(payload, dict):
+        return None
+    return BacktestRunConfig.model_validate(payload)
+
+
+def load_run_artifacts(run_id: str, paths: AppPaths | None = None) -> RunArtifacts:
+    paths = paths or get_app_paths()
+    base_dir = run_dir(paths, run_id)
+    manifest_path = base_dir / ARTIFACT_FILE_NAMES["manifest"]
+    manifest_payload = _read_json_file(manifest_path)
+    manifest = (
+        RunArtifactManifest.model_validate(manifest_payload)
+        if isinstance(manifest_payload, dict)
+        else None
+    )
+
+    config = load_run_config(run_id, paths=paths)
+    metrics_path = base_dir / ARTIFACT_FILE_NAMES["metrics"]
+    metrics_payload = _read_json_file(metrics_path)
+    metrics = metrics_payload if isinstance(metrics_payload, dict) else None
+
+    return RunArtifacts(
+        run_id=run_id,
+        manifest=manifest,
+        config=config,
+        metrics=metrics,
+        equity_curve=_read_frame(base_dir / ARTIFACT_FILE_NAMES["equity_curve"]),
+        drawdown_curve=_read_frame(base_dir / ARTIFACT_FILE_NAMES["drawdown_curve"]),
+        trades=_read_frame(base_dir / ARTIFACT_FILE_NAMES["trades"]),
+        annual_returns=_read_frame(base_dir / ARTIFACT_FILE_NAMES["annual_returns"]),
+    )
+
+
+def load_run_artifacts_from_sources(run_id: str, root: Path | None = None) -> RunArtifacts:
+    for source_label, paths in get_browse_paths(root):
+        base_dir = run_dir(paths, run_id)
+        if not base_dir.exists():
+            continue
+        artifacts = load_run_artifacts(run_id, paths=paths)
+        artifacts.source_label = source_label
+        return artifacts
+    return RunArtifacts(
+        run_id=run_id,
+        manifest=None,
+        config=None,
+        metrics=None,
+        equity_curve=pd.DataFrame(),
+        drawdown_curve=pd.DataFrame(),
+        trades=pd.DataFrame(),
+        annual_returns=pd.DataFrame(),
+        source_label="missing",
+    )
+
+
+def _connect_registry(paths: AppPaths) -> duckdb.DuckDBPyConnection | None:
+    if not paths.registry_path.exists():
+        return None
+    try:
+        return duckdb.connect(str(paths.registry_path), read_only=True)
+    except duckdb.Error:
+        return None
+
+
+def _registry_frame(sql: str, paths: AppPaths | None = None) -> pd.DataFrame:
+    paths = paths or get_app_paths()
+    connection = _connect_registry(paths)
+    if connection is None:
+        return pd.DataFrame()
+    try:
+        return connection.execute(sql).fetchdf()
+    except duckdb.Error:
+        return pd.DataFrame()
+    finally:
+        connection.close()
+
+
+def load_recent_runs(limit: int = 10, paths: AppPaths | None = None, *, source_label: str = "app") -> list[RunSummary]:
+    paths = paths or get_app_paths()
+    if not paths.registry_path.exists():
+        return []
+    bootstrap_registry(paths.registry_path)
+    frame = _registry_frame(
+        f"""
+        select
+            run_id,
+            strategy_name,
+            cast(start_date as varchar) as start_date,
+            cast(end_date as varchar) as end_date,
+            execution_mode,
+            status,
+            created_at,
+            completed_at,
+            artifacts_dir,
+            metrics_path
+        from backtest_runs
+        order by coalesce(completed_at, created_at) desc, created_at desc
+        limit {int(limit)}
+        """,
+        paths=paths,
+    )
+    if frame.empty:
+        return []
+    return _run_summaries_from_frame(frame, paths, source_label)
+
+
+def load_recent_runs_catalog(limit: int = 10, root: Path | None = None) -> list[RunSummary]:
+    combined: list[RunSummary] = []
+    for source_label, paths in get_browse_paths(root):
+        combined.extend(load_recent_runs(limit=limit, paths=paths, source_label=source_label))
+    deduped: dict[str, RunSummary] = {}
+    for summary in sorted(combined, key=_run_sort_key, reverse=True):
+        deduped.setdefault(summary.run_id, summary)
+    return list(deduped.values())[:limit]
+
+
+def load_latest_validation_summary(paths: AppPaths | None = None) -> ValidationSummary | None:
+    paths = paths or get_shared_paths()
+    if not paths.registry_path.exists():
+        return None
+    bootstrap_registry(paths.registry_path)
+    recent = _registry_frame(
+        """
+        select
+            validation_run_id,
+            dataset_name,
+            check_name,
+            severity,
+            status,
+            details
+        from validation_results
+        order by validation_run_id asc, dataset_name asc, check_name asc
+        limit 50
+        """,
+        paths=paths,
+    )
+    if recent.empty:
+        return None
+    status_counts = (
+        recent.groupby("status", dropna=False)
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+    severity_counts = (
+        recent.groupby("severity", dropna=False)
+        .size()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+    return ValidationSummary(
+        status_counts=status_counts,
+        severity_counts=severity_counts,
+        recent_results=recent,
+    )
+
+
+def load_data_health_snapshot(root: Path | None = None) -> DataHealthSnapshot:
+    paths = get_shared_paths(root)
+    validation_summary = load_latest_validation_summary(paths=paths)
+    validation_results: list[ValidationResultItem] = []
+    if validation_summary is not None:
+        for row in validation_summary.recent_results.itertuples(index=False):
+            validation_results.append(
+                ValidationResultItem(
+                    validation_run_id=str(row.validation_run_id),
+                    dataset_name=str(row.dataset_name),
+                    check_name=str(row.check_name),
+                    severity=str(row.severity),
+                    status=str(row.status),
+                    details=str(row.details),
+                )
+            )
+    return DataHealthSnapshot(
+        note=latest_data_health_note(paths=paths),
+        validation_summary=validation_summary,
+        validation_results=validation_results,
+        file_manifest=load_file_manifest_summary(paths=paths),
+        provider_capabilities=load_provider_capabilities(paths=paths),
+    )
+
+
+def load_file_manifest_summary(paths: AppPaths | None = None) -> list[FileManifestSummary]:
+    frame = _registry_frame(
+        """
+        select
+            dataset_name,
+            count(*) as file_count,
+            sum(coalesce(row_count, 0)) as row_count
+        from file_manifest
+        group by dataset_name
+        order by dataset_name asc
+        """,
+        paths=paths or get_shared_paths(),
+    )
+    return [
+        FileManifestSummary(
+            dataset_name=str(row.dataset_name),
+            file_count=int(row.file_count),
+            row_count=_safe_int(row.row_count),
+        )
+        for row in frame.itertuples(index=False)
+    ]
+
+
+def load_provider_capabilities(paths: AppPaths | None = None) -> list[ProviderCapabilitySummary]:
+    frame = _registry_frame(
+        """
+        select
+            provider_name,
+            supports_minute_bars,
+            supports_security_status_history,
+            supports_price_limits,
+            supports_suspensions
+        from provider_capabilities
+        order by provider_name asc
+        """,
+        paths=paths or get_shared_paths(),
+    )
+    return [
+        ProviderCapabilitySummary(
+            provider_name=str(row.provider_name),
+            supports_minute_bars=bool(row.supports_minute_bars),
+            supports_security_status_history=bool(row.supports_security_status_history),
+            supports_price_limits=bool(row.supports_price_limits),
+            supports_suspensions=bool(row.supports_suspensions),
+        )
+        for row in frame.itertuples(index=False)
+    ]
+
+
+def load_scan_batches(limit: int = 25, root: Path | None = None) -> list[ScanBatchSummary]:
+    summaries: list[ScanBatchSummary] = []
+    for source_label, paths in get_browse_paths(root):
+        if not paths.registry_path.exists():
+            continue
+        bootstrap_registry(paths.registry_path)
+        frame = _registry_frame(
+            f"""
+            select
+                scan_batch_id,
+                strategy_name,
+                created_at,
+                result_path
+            from scan_batches
+            order by created_at desc
+            limit {int(limit)}
+            """,
+            paths=paths,
+        )
+        for row in frame.itertuples(index=False):
+            batch = _read_scan_batch_result(_resolve_path(str(row.result_path), paths.workspace_root))
+            if batch is None:
+                continue
+            best_run = max(batch.runs, key=lambda item: item.total_return_pct, default=None)
+            parameter_names = sorted({name for run in batch.runs for name in run.params})
+            summaries.append(
+                ScanBatchSummary(
+                    scan_batch_id=batch.scan_batch_id,
+                    strategy_name=batch.strategy_name,
+                    created_at=_as_datetime(row.created_at),
+                    run_count=len(batch.runs),
+                    parameter_names=parameter_names,
+                    best_run_id=best_run.run_id if best_run is not None else None,
+                    best_return_pct=best_run.total_return_pct if best_run is not None else None,
+                    source_label=source_label,
+                    result_path=str(row.result_path),
+                )
+            )
+    summaries.sort(key=lambda item: item.created_at or datetime.min, reverse=True)
+    return summaries[:limit]
+
+
+def load_scan_batch_result_from_sources(scan_batch_id: str, root: Path | None = None) -> ScanBatchResult | None:
+    for source_label, paths in get_browse_paths(root):
+        if not paths.registry_path.exists():
+            continue
+        frame = _registry_frame(
+            """
+            select result_path
+            from scan_batches
+            where scan_batch_id = ?
+            """.replace("?", f"'{scan_batch_id}'"),
+            paths=paths,
+        )
+        if frame.empty:
+            continue
+        result_path = _resolve_path(str(frame.iloc[0]["result_path"]), paths.workspace_root)
+        batch = _read_scan_batch_result(result_path)
+        if batch is not None:
+            return batch
+    return None
+
+
+def load_experiment_library_entries(root: Path | None = None) -> list[ExperimentLibraryEntry]:
+    candidates = (
+        app_root(root) / "experiments",
+        app_root(root) / "library",
+        get_app_paths(root).runs_root,
+        get_app_paths(root).local_state_dir / "scans",
+    )
+    entries: list[ExperimentLibraryEntry] = []
+    for base_dir in candidates:
+        if not base_dir.exists():
+            continue
+        for path in sorted(base_dir.iterdir(), key=lambda item: item.name):
+            stat = path.stat()
+            item_count = len(list(path.iterdir())) if path.is_dir() else None
+            label = path.relative_to(app_root(root)).as_posix()
+            entries.append(
+                ExperimentLibraryEntry(
+                    label=label,
+                    path=str(path),
+                    kind="directory" if path.is_dir() else "file",
+                    modified_at=datetime.fromtimestamp(stat.st_mtime),
+                    item_count=item_count,
+                )
+            )
+    entries.sort(key=lambda item: ((item.modified_at or datetime.min), item.label), reverse=True)
+    return entries
+
+
+def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Path | None = None) -> HomePageData:
+    if paths is not None:
+        validation_summary = load_latest_validation_summary(paths=paths)
+        validation_results: list[ValidationResultItem] = []
+        if validation_summary is not None:
+            for row in validation_summary.recent_results.itertuples(index=False):
+                validation_results.append(
+                    ValidationResultItem(
+                        validation_run_id=str(row.validation_run_id),
+                        dataset_name=str(row.dataset_name),
+                        check_name=str(row.check_name),
+                        severity=str(row.severity),
+                        status=str(row.status),
+                        details=str(row.details),
+                    )
+                )
+        recent_runs = load_recent_runs(limit=limit, paths=paths)
+        run_count = len(load_recent_runs(limit=100, paths=paths))
+        return HomePageData(
+            recent_runs=recent_runs,
+            validation_results=validation_results,
+            validation_summary=validation_summary,
+            default_template=default_template_summary(),
+            latest_saved_template=load_latest_saved_template(paths=paths),
+            data_health_note=latest_data_health_note(paths=paths),
+            app_run_count=run_count,
+            shared_run_count=run_count,
+            scan_batches=[],
+            experiment_library_entries=[],
+            app_paths=paths,
+            shared_paths=paths,
+        )
+
+    shared_paths = get_shared_paths(root)
+    app_paths = get_app_paths(root)
+    data_health = load_data_health_snapshot(root)
+    recent_runs = load_recent_runs_catalog(limit=limit, root=root)
+    return HomePageData(
+        recent_runs=recent_runs,
+        validation_results=data_health.validation_results,
+        validation_summary=data_health.validation_summary,
+        default_template=default_template_summary(),
+        latest_saved_template=load_latest_saved_template(root=root),
+        data_health_note=data_health.note,
+        app_run_count=len(load_recent_runs(limit=100, paths=app_paths, source_label="app")),
+        shared_run_count=len(load_recent_runs(limit=100, paths=shared_paths, source_label="shared")),
+        scan_batches=load_scan_batches(limit=10, root=root),
+        experiment_library_entries=load_experiment_library_entries(root=root),
+        app_paths=app_paths,
+        shared_paths=shared_paths,
+    )
+
+
+def build_run_submission(config: BacktestRunConfig, run_requested: bool) -> RunSubmission:
+    payload = config.model_dump(mode="json")
+    summary = {
+        "run_id": config.run_id,
+        "strategy_name": config.strategy_name,
+        "start_date": str(config.start_date),
+        "end_date": str(config.end_date),
+        "execution_mode": config.execution.mode.value,
+        "run_requested": run_requested,
+    }
+    return RunSubmission(
+        config=config,
+        run_requested=run_requested,
+        payload=payload,
+        summary=summary,
+    )
+
+
+def latest_data_health_note(paths: AppPaths | None = None) -> str:
+    summary = load_latest_validation_summary(paths=paths)
+    if summary is None:
+        return "No validation results are available yet."
+    failed = summary.recent_results[
+        ~summary.recent_results["status"].astype(str).str.lower().isin({"pass", "passed"})
+    ]
+    if failed.empty:
+        return "Latest validation samples are clean."
+    return f"{len(failed)} recent validation checks are not passing."
+
+
+def _read_scan_batch_result(path: Path) -> ScanBatchResult | None:
+    payload = _read_json_file(path)
+    if payload is None or not isinstance(payload, dict):
+        return None
+    return ScanBatchResult.model_validate(payload)
+
+
+def _run_summaries_from_frame(frame: pd.DataFrame, paths: AppPaths, source_label: str) -> list[RunSummary]:
+    metrics_map: dict[str, dict[str, Any]] = {}
+    for row in frame.itertuples(index=False):
+        if not row.metrics_path:
+            continue
+        metrics_payload = _read_json_file(_resolve_path(row.metrics_path, paths.workspace_root))
+        if isinstance(metrics_payload, dict):
+            metrics_map[str(row.run_id)] = metrics_payload
+
+    summaries: list[RunSummary] = []
+    for row in frame.itertuples(index=False):
+        metrics_payload = metrics_map.get(str(row.run_id), {})
+        summaries.append(
+            RunSummary(
+                run_id=str(row.run_id),
+                strategy_name=str(row.strategy_name),
+                start_date=str(row.start_date),
+                end_date=str(row.end_date),
+                execution_mode=str(row.execution_mode),
+                status=_as_run_status(row.status),
+                created_at=_as_datetime(row.created_at),
+                completed_at=_as_datetime(row.completed_at),
+                artifacts_dir=str(row.artifacts_dir),
+                metrics_path=str(row.metrics_path) if row.metrics_path else None,
+                total_return_pct=_safe_float(metrics_payload.get("total_return_pct")),
+                max_drawdown_pct=_safe_float(metrics_payload.get("max_drawdown_pct")),
+                trade_count=_safe_int(metrics_payload.get("trade_count")),
+                source_label=source_label,
+            )
+        )
+    return summaries
+
+
+def _run_sort_key(summary: RunSummary) -> datetime:
+    return summary.completed_at or summary.created_at or datetime.min
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return value
+    if hasattr(value, "to_pydatetime"):
+        return value.to_pydatetime()
+    return None
+
+
+def _as_run_status(value: Any) -> RunStatus | str:
+    try:
+        return RunStatus(str(value))
+    except ValueError:
+        return str(value)
+
+
+def registry_bootstrap(paths: AppPaths | None = None) -> None:
+    paths = paths or get_app_paths()
+    bootstrap_registry(paths.registry_path)
