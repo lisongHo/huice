@@ -70,6 +70,9 @@ class _FakeStreamlit(SimpleNamespace):
     def write(self, *args) -> None:
         self.calls.append(("write", args))
 
+    def markdown(self, *args, **kwargs) -> None:
+        self.calls.append(("markdown", args))
+
     def json(self, *args, **kwargs) -> None:
         self.calls.append(("json", args))
 
@@ -133,7 +136,7 @@ def test_single_backtest_page_only_prepares_a_request_snapshot(tmp_path: Path, m
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/1_Single_Backtest.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/1_单次回测.py", run_name="__main__")
 
     assert fake_streamlit.session_state["quantlab_pending_backtest_request"] == draft.payload
     assert not (paths.runs_root.exists() and any(paths.runs_root.iterdir()))

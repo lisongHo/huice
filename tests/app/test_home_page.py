@@ -57,7 +57,7 @@ class _FakeStreamlit(SimpleNamespace):
     def info(self, *args) -> None:
         self.calls.append(("info", args))
 
-    def markdown(self, *args) -> None:
+    def markdown(self, *args, **kwargs) -> None:
         self.calls.append(("markdown", args))
 
     def metric(self, *args, **kwargs) -> None:
@@ -116,5 +116,5 @@ def test_home_page_shows_preflight_banner_and_next_steps(tmp_path: Path, monkeyp
     runpy.run_path(Path(__file__).resolve().parents[2] / "app/Home.py", run_name="__main__")
 
     assert any(call[0] == "warning" for call in fake_streamlit.calls)
-    assert any(call[0] == "markdown" and call[1][0] == "**Next steps**" for call in fake_streamlit.calls)
+    assert any(call[0] == "markdown" and call[1][0] == "**下一步建议**" for call in fake_streamlit.calls)
     assert any(call[0] == "markdown" and call[1][0] == "- Seed demo data." for call in fake_streamlit.calls)

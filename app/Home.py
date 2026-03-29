@@ -12,9 +12,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ui.data_access import is_passing_validation_status, load_home_page_data  # noqa: E402
+from app.ui.theme import (  # noqa: E402
+    apply_workbench_theme,
+    execution_mode_label,
+    render_card,
+    render_page_header,
+    render_section_label,
+    run_status_label,
+    source_label,
+)
 
-
-st.set_page_config(page_title="Quantlab Workbench", layout="wide")
+apply_workbench_theme("量化研究工作台")
 
 
 def _format_pct(value: float | None) -> str:
@@ -26,14 +34,14 @@ def _run_frame(runs: list) -> pd.DataFrame:
         [
             {
                 "run_id": run.run_id,
-                "strategy": run.strategy_name,
-                "window": f"{run.start_date} to {run.end_date}",
-                "mode": run.execution_mode,
-                "status": str(run.status),
-                "source": run.source_label,
-                "return_pct": run.total_return_pct,
-                "max_dd_pct": run.max_drawdown_pct,
-                "trades": run.trade_count,
+                "策略": run.strategy_name,
+                "区间": f"{run.start_date} 至 {run.end_date}",
+                "执行模式": execution_mode_label(run.execution_mode),
+                "状态": run_status_label(str(run.status)),
+                "来源": source_label(run.source_label),
+                "收益率": run.total_return_pct,
+                "最大回撤": run.max_drawdown_pct,
+                "成交笔数": run.trade_count,
             }
             for run in runs
         ]
@@ -44,8 +52,12 @@ home = load_home_page_data(limit=12)
 latest_run = home.recent_runs[0] if home.recent_runs else None
 completed_runs = [run for run in home.recent_runs if str(run.status).lower() == "completed"]
 
-st.title("Quantlab Workbench")
-st.caption("Artifact-first research console with explicit execution and app-local run persistence.")
+render_page_header(
+    kicker="Quantlab v0.1",
+    title="量化研究工作台",
+    description="中文优先的本地 A 股分钟级研究终端。所有回测、扫描与同步都保持显式触发，artifact 与 run 结果优先展示。",
+    badge="单用户 · 本机使用",
+)
 
 readiness = home.readiness_summary
 if readiness.status == "success":
@@ -55,75 +67,80 @@ elif readiness.status == "warning":
 else:
     st.info(f"{readiness.headline} {readiness.body}")
 if readiness.next_steps:
-    st.markdown("**Next steps**")
+    st.markdown("**下一步建议**")
     for step in readiness.next_steps:
         st.markdown(f"- {step}")
 
 metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
 with metric_col1:
-    st.metric("Recent runs", len(home.recent_runs))
+    render_card(label="近期运行", value=str(len(home.recent_runs)), note="最近可浏览的回测运行数量")
 with metric_col2:
-    st.metric("Completed", len(completed_runs))
+    render_card(label="已完成", value=str(len(completed_runs)), note="状态为 completed 的运行")
 with metric_col3:
-    st.metric("App-local runs", home.app_run_count)
+    render_card(label="本地运行", value=str(home.app_run_count), note="保存到 app/.quantlab 的运行")
 with metric_col4:
-    st.metric("Saved scan batches", len(home.scan_batches))
+    render_card(label="扫描批次", value=str(len(home.scan_batches)), note="已保存的参数扫描批次")
 
 focus_col1, focus_col2, focus_col3 = st.columns(3)
 with focus_col1:
-    st.subheader("Latest run")
+    render_section_label("今日焦点")
+    st.subheader("最近一次运行")
     if latest_run is None:
-        st.info("No persisted runs are available yet.")
+        st.info("当前还没有可浏览的已保存运行。")
     else:
-        st.write(f"`{latest_run.run_id}` from `{latest_run.source_label}` state")
-        st.write(f"Strategy: `{latest_run.strategy_name}`")
-        st.write(f"Window: {latest_run.start_date} to {latest_run.end_date}")
-        st.write(f"Return: {_format_pct(latest_run.total_return_pct)}")
+        st.write(f"`{latest_run.run_id}` · {source_label(latest_run.source_label)}")
+        st.write(f"策略：`{latest_run.strategy_name}`")
+        st.write(f"区间：{latest_run.start_date} 至 {latest_run.end_date}")
+        st.write(f"收益率：{_format_pct(latest_run.total_return_pct)}")
 with focus_col2:
-    st.subheader("Template defaults")
-    st.write(f"Strategy: `{home.default_template.strategy_name}`")
-    st.write(f"Execution: `{home.default_template.execution_mode}`")
+    render_section_label("默认模板")
+    st.subheader("内置策略模板")
+    st.write(f"策略：`{home.default_template.strategy_name}`")
+    st.write(f"执行：`{execution_mode_label(home.default_template.execution_mode)}`")
     st.caption(home.default_template.notes)
     if home.latest_saved_template is not None:
-        st.write("Reusable latest template")
+        st.write("最近一次可复用模板")
         st.write(
             f"`{home.latest_saved_template.strategy_name}` "
-            f"({home.latest_saved_template.start_date} to {home.latest_saved_template.end_date})"
+            f"（{home.latest_saved_template.start_date} 至 {home.latest_saved_template.end_date}）"
         )
 with focus_col3:
-    st.subheader("Data health")
+    render_section_label("数据健康")
+    st.subheader("校验概览")
     st.write(home.data_health_note)
     if home.validation_summary is None:
-        st.info("No validation summary is available yet.")
+        st.info("当前还没有可用的校验摘要。")
     else:
         failing = home.validation_summary.recent_results
         failing = failing[~failing["status"].astype(str).str.lower().map(is_passing_validation_status)]
-        st.metric("Recent issues", len(failing))
-        st.metric("Shared runs", home.shared_run_count)
+        st.metric("近期异常", len(failing))
+        st.metric("共享运行", home.shared_run_count)
 
 st.divider()
 left_col, right_col = st.columns((1.6, 1))
 with left_col:
-    st.subheader("Recent run catalog")
+    render_section_label("运行目录")
+    st.subheader("近期回测目录")
     run_frame = _run_frame(home.recent_runs)
     if run_frame.empty:
-        st.info("No run catalog entries are available yet.")
+        st.info("当前还没有可浏览的运行目录。")
     else:
         st.dataframe(run_frame, use_container_width=True, hide_index=True)
 with right_col:
-    st.subheader("Scan batches")
+    render_section_label("扫描结果")
+    st.subheader("参数扫描批次")
     if not home.scan_batches:
-        st.info("No persisted scan batches are available yet.")
+        st.info("当前还没有已保存的扫描批次。")
     else:
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "scan_batch_id": batch.scan_batch_id,
-                        "strategy": batch.strategy_name,
-                        "runs": batch.run_count,
-                        "best_return_pct": batch.best_return_pct,
-                        "source": batch.source_label,
+                        "批次 ID": batch.scan_batch_id,
+                        "策略": batch.strategy_name,
+                        "运行数": batch.run_count,
+                        "最佳收益率": batch.best_return_pct,
+                        "来源": source_label(batch.source_label),
                     }
                     for batch in home.scan_batches
                 ]
@@ -135,18 +152,19 @@ with right_col:
 st.divider()
 library_col, validation_col = st.columns((1, 1.4))
 with library_col:
-    st.subheader("Experiment library")
+    render_section_label("研究目录")
+    st.subheader("实验资料库")
     if not home.experiment_library_entries:
-        st.info("No experiment-library structure exists under app/** yet.")
+        st.info("`app/**` 下还没有实验资料结构。")
     else:
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "label": entry.label,
-                        "kind": entry.kind,
-                        "items": entry.item_count,
-                        "modified_at": entry.modified_at,
+                        "标签": entry.label,
+                        "类型": entry.kind,
+                        "条目数": entry.item_count,
+                        "更新时间": entry.modified_at,
                     }
                     for entry in home.experiment_library_entries
                 ]
@@ -155,19 +173,20 @@ with library_col:
             hide_index=True,
         )
 with validation_col:
-    st.subheader("Recent validation checks")
+    render_section_label("校验记录")
+    st.subheader("近期校验检查")
     if not home.validation_results:
-        st.info("No validation results are available yet.")
+        st.info("当前还没有可用的校验结果。")
     else:
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "dataset": item.dataset_name,
-                        "check": item.check_name,
-                        "severity": item.severity,
-                        "status": item.status,
-                        "details": item.details,
+                        "数据集": item.dataset_name,
+                        "检查项": item.check_name,
+                        "严重级别": item.severity,
+                        "状态": item.status,
+                        "详情": item.details,
                     }
                     for item in home.validation_results
                 ]
@@ -177,7 +196,8 @@ with validation_col:
         )
 
 st.divider()
-st.subheader("State routing")
+render_section_label("状态目录")
+st.subheader("本地状态路由")
 state_snapshot = {
     "workspace_root": str(home.app_paths.workspace_root),
     "app_local_state_dir": str(home.app_paths.local_state_dir),

@@ -63,12 +63,12 @@ To persist the latest provider check for the UI and keep a timestamped readiness
 The Streamlit workbench currently ships with six pages:
 
 - `Home` at `app/Home.py`: shows the readiness preflight, template defaults, latest validation summary, recent runs, scan batches, experiment-library entries, and workspace paths.
-- `Single Backtest` at `app/pages/1_Single_Backtest.py`: prepares an explicit run request snapshot and browses persisted artifacts from completed runs.
-- `Data Health` at `app/pages/2_Data_Health.py`: reads validation samples, file manifests, and provider capability rows from the registry.
-- `Parameter Scan` at `app/pages/3_Parameter_Scan.py`: prepares scan grids explicitly, checks for a scan runner hook, and browses persisted scan batches.
-- `Replay Diagnostics` at `app/pages/4_Replay_Diagnostics.py`: inspects saved run artifacts, equity curves, and trade-level diagnostics.
-- `Provider Readiness` at `app/pages/5_Provider_Readiness.py`: runs the readiness preflight only when you click the button and saves the latest result for later review.
-- `Sync Cockpit` at `app/pages/6_Sync_Cockpit.py`: prepares explicit sync requests, supports both dry-run planning and real execution on button click, shows the latest saved readiness snapshot first, and browses saved sync runs with actionable provider blocker guidance.
+- `单次回测` at `app/pages/1_单次回测.py`: prepares one explicit run request and browses persisted artifacts from completed runs.
+- `数据健康` at `app/pages/2_数据健康.py`: reads validation samples, file manifests, and provider capability rows from the registry.
+- `参数扫描` at `app/pages/3_参数扫描.py`: prepares scan grids explicitly, checks for a scan runner hook, and browses persisted scan batches.
+- `回放诊断` at `app/pages/4_回放诊断.py`: inspects saved run artifacts, equity curves, and trade-level diagnostics.
+- `数据源就绪检查` at `app/pages/5_数据源就绪检查.py`: runs the readiness preflight only when you click the button and saves the latest result for later review.
+- `同步驾驶舱` at `app/pages/6_同步驾驶舱.py`: prepares explicit sync requests, supports both dry-run planning and real execution on button click, shows the latest saved readiness snapshot first, and browses saved sync runs with actionable provider blocker guidance.
 
 The UI is intentionally request-driven. Changing widgets should prepare a draft; execution happens only from explicit script or button paths.
 
@@ -79,7 +79,7 @@ The UI is intentionally request-driven. Changing widgets should prepare a draft;
 - built-in T-1 daily-feature strategy with near-close and next-open control execution
 - A-share rule handling for T+1, ST filter, suspension, price limits, fees, taxes, slippage, board lots, and no overlapping entries
 - immutable run artifacts: config, metrics, equity, drawdown, trades, annual returns
-- Streamlit multi-page workbench with Home, Data Health, Single Backtest, Parameter Scan, and Replay Diagnostics pages
+- Streamlit 多页面工作台，包含中文化的首页、单次回测、数据健康、参数扫描、回放诊断、数据源就绪检查和同步驾驶舱
 - local demo seed and single-run scripts that do not require provider credentials
 - readiness/preflight messaging for real-data setup, including persisted readiness history
 - explicit sync planning and execution with persisted sync-run artifacts and actionable provider blocker diagnostics

@@ -19,10 +19,11 @@ from app.ui.data_access import (  # noqa: E402
     load_scan_batches,
 )
 from app.ui.forms import render_parameter_scan_form  # noqa: E402
+from app.ui.theme import apply_workbench_theme, execution_mode_label, render_page_header, render_section_label, source_label  # noqa: E402
 from app.ui.workbench import detect_scan_runner, execute_parameter_scan  # noqa: E402
 
 
-st.set_page_config(page_title="Parameter Scan", layout="wide")
+apply_workbench_theme("参数扫描")
 
 
 def _scan_run_frame(batch) -> pd.DataFrame:
@@ -44,23 +45,28 @@ def _scan_run_frame(batch) -> pd.DataFrame:
 default_config = default_template_summary().config
 probe = detect_scan_runner()
 
-st.title("Parameter Scan")
-st.caption("Prepare scan grids explicitly, browse persisted batches, and only execute when a scan hook is available.")
+render_page_header(
+    kicker="Parameter Scan",
+    title="参数扫描",
+    description="准备参数网格、评估组合规模，并在 scan runner 可用时显式执行。页面优先浏览已保存批次，不因控件变化自动跑任务。",
+    badge="显式触发",
+)
 
 draft = render_parameter_scan_form(default_config)
 if draft.submitted:
     st.session_state["quantlab_pending_scan_request"] = draft.payload
     st.session_state["quantlab_pending_scan_summary"] = draft.summary
-    st.success("Scan request prepared. Nothing runs until you click the scan button.")
+    st.success("扫描请求已准备完成。在你点击执行按钮前，不会自动运行。")
 
 pending_request = st.session_state.get("quantlab_pending_scan_request")
 pending_summary = st.session_state.get("quantlab_pending_scan_summary")
 
 prep_col1, prep_col2 = st.columns((1.4, 1))
 with prep_col1:
-    st.subheader("Prepared scan request")
+    render_section_label("请求草稿")
+    st.subheader("已准备的扫描请求")
     if pending_request is None:
-        st.info("Submit the form above to prepare a scan request payload.")
+        st.info("先提交上方表单，生成一份扫描请求。")
     else:
         st.json(pending_summary)
         combination_count = len(
@@ -72,21 +78,22 @@ with prep_col1:
                 )
             )
         )
-        st.caption(f"Grid size: {combination_count} parameter combinations.")
-        with st.expander("Raw scan request", expanded=False):
+        st.caption(f"当前网格规模：{combination_count} 个参数组合。")
+        with st.expander("查看原始扫描请求", expanded=False):
             st.code(json.dumps(pending_request, indent=2), language="json")
 with prep_col2:
-    st.subheader("Execution hook")
+    render_section_label("执行入口")
+    st.subheader("扫描执行")
     if probe.available:
         st.success(probe.message)
     else:
         st.info(probe.message)
     seed_demo_if_missing = st.checkbox(
-        "Seed demo data into app-local state if required for scan execution",
+        "若扫描执行需要，则写入 demo 数据到 app-local state",
         value=False,
     )
     run_scan = st.button(
-        "Run parameter scan",
+        "执行参数扫描",
         type="primary",
         use_container_width=True,
         disabled=(pending_request is None or not probe.available),
@@ -114,37 +121,47 @@ if last_execution is not None:
     st.json(last_execution)
 
 st.divider()
-st.subheader("Persisted scan batches")
+render_section_label("结果浏览")
+st.subheader("已保存的扫描批次")
 batches = load_scan_batches(limit=20)
 if not batches:
-    st.info("No persisted scan batches are available yet.")
+    st.info("当前还没有已保存的扫描批次。")
 else:
     batch_ids = [batch.scan_batch_id for batch in batches]
-    selected_batch_id = st.selectbox("Scan batch ID", options=batch_ids)
+    selected_batch_id = st.selectbox("扫描批次 ID", options=batch_ids)
     batch_summary = next(batch for batch in batches if batch.scan_batch_id == selected_batch_id)
     batch = load_scan_batch_result_from_sources(selected_batch_id)
 
     st.dataframe(
         pd.DataFrame(
-            [
-                {
-                    "scan_batch_id": batch_summary.scan_batch_id,
-                    "strategy": batch_summary.strategy_name,
-                    "runs": batch_summary.run_count,
-                    "parameters": ", ".join(batch_summary.parameter_names),
-                    "best_run_id": batch_summary.best_run_id,
-                    "best_return_pct": batch_summary.best_return_pct,
-                    "source": batch_summary.source_label,
-                }
-            ]
-        ),
+                [
+                    {
+                        "批次 ID": batch_summary.scan_batch_id,
+                        "策略": batch_summary.strategy_name,
+                        "运行数": batch_summary.run_count,
+                        "参数": ", ".join(batch_summary.parameter_names),
+                        "最佳 run_id": batch_summary.best_run_id,
+                        "最佳收益率": batch_summary.best_return_pct,
+                        "来源": source_label(batch_summary.source_label),
+                    }
+                ]
+            ),
         use_container_width=True,
         hide_index=True,
     )
 
     if batch is None:
-        st.warning("The selected scan batch metadata exists, but its result payload could not be loaded.")
+        st.warning("该扫描批次的元数据存在，但结果 payload 暂时无法加载。")
     else:
         run_frame = _scan_run_frame(batch)
+        display_frame = run_frame.rename(
+            columns={
+                "run_id": "run_id",
+                "total_return_pct": "收益率",
+                "max_drawdown_pct": "最大回撤",
+                "trade_count": "成交笔数",
+                "annualized_return_pct": "年化收益率",
+            }
+        )
         st.plotly_chart(scan_comparison_figure(run_frame), use_container_width=True)
-        st.dataframe(run_frame, use_container_width=True, hide_index=True)
+        st.dataframe(display_frame, use_container_width=True, hide_index=True)

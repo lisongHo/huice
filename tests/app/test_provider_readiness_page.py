@@ -67,7 +67,7 @@ class _FakeStreamlit(SimpleNamespace):
     def write(self, *args) -> None:
         self.calls.append(("write", args))
 
-    def markdown(self, *args) -> None:
+    def markdown(self, *args, **kwargs) -> None:
         self.calls.append(("markdown", args))
 
     def code(self, *args, **kwargs) -> None:
@@ -125,7 +125,7 @@ def test_provider_readiness_page_shows_saved_artifact_without_running_checks(tmp
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("readiness check should not run")),
     )
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/5_Provider_Readiness.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/5_数据源就绪检查.py", run_name="__main__")
 
     assert any(call[0] == "success" and "Saved readiness is available." in call[1][0] for call in fake_streamlit.calls)
     assert "quantlab_last_provider_readiness_check" not in fake_streamlit.session_state
@@ -171,7 +171,7 @@ def test_provider_readiness_page_runs_only_after_button_click(tmp_path: Path, mo
     )
     monkeypatch.setattr(workbench, "execute_provider_readiness_check", fake_execute_provider_readiness_check)
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/5_Provider_Readiness.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/5_数据源就绪检查.py", run_name="__main__")
 
     assert executed["count"] == 1
     assert fake_streamlit.session_state["quantlab_last_provider_readiness_check"]["message"] == "Readiness check completed."

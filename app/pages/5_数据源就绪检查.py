@@ -11,10 +11,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ui.data_access import load_latest_readiness_artifact  # noqa: E402
+from app.ui.theme import apply_workbench_theme, render_page_header, render_section_label  # noqa: E402
 from app.ui.workbench import detect_provider_readiness_runner, execute_provider_readiness_check  # noqa: E402
 
 
-st.set_page_config(page_title="Provider Readiness", layout="wide")
+apply_workbench_theme("数据源就绪检查")
 
 
 def _summary_to_dict(summary: object) -> dict[str, object]:
@@ -40,51 +41,57 @@ def _render_summary(summary: object) -> None:
         st.info(f"{headline} {body}")
 
     if next_steps:
-        st.markdown("**Next steps**")
+        st.markdown("**下一步建议**")
         for step in next_steps:
             st.markdown(f"- {step}")
 
 
-st.title("Provider Readiness")
-st.caption("Read the latest saved readiness artifact first. Checks only run when you click the button below.")
+render_page_header(
+    kicker="Provider Readiness",
+    title="数据源就绪检查",
+    description="先读取最近一次已保存的 readiness artifact，再决定是否重新检查。所有检查都只会在你点击按钮后执行。",
+    badge="显式检查",
+)
 
 latest_artifact = load_latest_readiness_artifact()
 probe = detect_provider_readiness_runner()
 
 overview_col, action_col = st.columns((1.4, 1))
 with overview_col:
-    st.subheader("Latest saved result")
+    render_section_label("已保存结果")
+    st.subheader("最近一次就绪检查")
     if latest_artifact is None:
-        st.info("No persisted readiness artifact is available yet.")
+        st.info("当前还没有已保存的 readiness artifact。")
     else:
-        st.caption(f"Loaded from `{latest_artifact.path}`")
+        st.caption(f"已从 `{latest_artifact.path}` 加载。")
         _render_summary(latest_artifact.summary)
-        with st.expander("Raw saved artifact", expanded=False):
+        with st.expander("查看原始 artifact", expanded=False):
             payload = getattr(latest_artifact, "payload", None)
             if isinstance(payload, dict):
                 st.code(json.dumps(payload, indent=2), language="json")
             elif isinstance(payload, list):
                 st.code(json.dumps(payload, indent=2), language="json")
             elif payload is None:
-                st.info("The saved artifact does not expose a raw payload.")
+                st.info("该 artifact 没有可直接展示的原始 payload。")
             else:
                 st.code(str(payload))
 
 with action_col:
-    st.subheader("Execution")
+    render_section_label("执行入口")
+    st.subheader("重新执行检查")
     if probe.available:
         st.success(probe.message)
     else:
         st.info(probe.message)
-    st.write("Nothing runs automatically. Click the button to execute the readiness checks.")
+    st.write("系统不会自动运行检查；只有点击按钮时才会触发。")
     run_now = st.button(
-        "Run readiness checks now",
+        "立即执行就绪检查",
         type="primary",
         use_container_width=True,
         disabled=not probe.available,
     )
     if run_now:
-        with st.spinner("Running readiness checks..."):
+        with st.spinner("正在执行数据源就绪检查..."):
             result = execute_provider_readiness_check()
         st.session_state["quantlab_last_provider_readiness_check"] = {
             "success": bool(getattr(result, "success", False)),
@@ -96,7 +103,8 @@ with action_col:
 last_execution = st.session_state.get("quantlab_last_provider_readiness_check")
 if last_execution is not None:
     st.divider()
-    st.subheader("Last check")
+    render_section_label("最近执行")
+    st.subheader("最近一次检查结果")
     if last_execution["success"]:
         st.success(last_execution["message"])
     else:

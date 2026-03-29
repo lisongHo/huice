@@ -268,8 +268,8 @@ def default_template_summary() -> TemplateSummary:
         end_date=None,
         source="builtin defaults",
         notes=(
-            "Default single-strategy template for near-close A-share minute research. "
-            "Set the date window on the Single Backtest page before launching."
+            "默认内置策略模板，适用于 A 股尾盘分钟级研究。"
+            "在单次回测页面设置日期区间后再执行。"
         ),
         config=BacktestRunConfig(
             strategy_name=BUILTIN_STRATEGY_NAME,
@@ -302,11 +302,11 @@ def _coerce_readiness_summary(payload: dict[str, Any] | list[Any] | str, *, path
             if not token_visible:
                 return ReadinessSummary(
                     status="warning",
-                    headline="Provider readiness check cannot see a token yet.",
-                    body="The latest saved preflight says the provider token is not visible to this workspace.",
+                    headline="就绪检查尚未识别到 token。",
+                    body="最近一次保存的预检结果显示：当前工作区还看不到 provider token。",
                     next_steps=[
-                        "Set TUSHARE_TOKEN or fill configs/provider.toml.",
-                        "Run the readiness check again after updating credentials.",
+                        "设置 TUSHARE_TOKEN，或补全 configs/provider.toml。",
+                        "更新凭证后，再次执行就绪检查。",
                     ],
                 )
             if errors:
@@ -314,39 +314,39 @@ def _coerce_readiness_summary(payload: dict[str, Any] | list[Any] | str, *, path
                 if "minute-data permission is missing" in combined_error_text.lower():
                     return ReadinessSummary(
                         status="warning",
-                        headline="Latest provider readiness check found missing minute-data permission.",
-                        body="The token is visible, but the saved preflight still cannot access stock minute history.",
+                        headline="分钟数据权限仍未开通。",
+                        body="token 已可见，但最近一次预检仍无法访问股票分钟历史。",
                         next_steps=[
-                            "Enable the Tushare minute-data permission for this token.",
-                            "Run the readiness check again after permissions are updated.",
+                            "为当前 token 开通 Tushare 分钟数据权限。",
+                            "权限更新后，再次执行就绪检查。",
                         ],
                     )
                 if "unable to reach tushare api" in combined_error_text.lower():
                     return ReadinessSummary(
                         status="warning",
-                        headline="Latest provider readiness check could not reach the upstream API.",
-                        body="The saved preflight shows a network or DNS failure rather than a local configuration issue.",
+                        headline="上游 API 暂时不可达。",
+                        body="最近一次预检更像是网络或 DNS 故障，而不是本地配置问题。",
                         next_steps=[
-                            "Retry the readiness check with network access.",
-                            "If it still fails, verify the configured API URL and local network path.",
+                            "恢复网络后再次执行就绪检查。",
+                            "如果仍失败，请核对 API URL 和本机网络路径。",
                         ],
                     )
                 return ReadinessSummary(
                     status="warning",
-                    headline="Latest provider readiness check found upstream access gaps.",
-                    body="The token is visible, but one or more required endpoints still returned errors.",
+                    headline="上游访问仍存在缺口。",
+                    body="token 已可见，但一个或多个关键 endpoint 仍返回错误。",
                     next_steps=[
-                        "Review the saved endpoint probe errors on the Provider Readiness page.",
-                        "Grant the missing Tushare permissions, then rerun the readiness check.",
+                        "到数据源就绪检查页面查看保存下来的 endpoint 错误。",
+                        "补齐 Tushare 权限后重新执行就绪检查。",
                     ],
                 )
             return ReadinessSummary(
                 status="success",
-                headline="Latest provider readiness check passed.",
-                body="The saved preflight can see the token and the probed endpoints responded successfully.",
+                headline="最近一次就绪检查已通过。",
+                body="保存下来的预检结果显示 token 可见，且探测的 endpoint 响应正常。",
                 next_steps=[
-                    "Run the sync or backfill flow to publish data.",
-                    "Open Data Health after the first real publish.",
+                    "接下来可以执行 Sync 或 Backfill 发布真实数据。",
+                    "第一次真实发布后，打开数据健康页面继续检查。",
                 ],
             )
 
@@ -358,13 +358,13 @@ def _coerce_readiness_summary(payload: dict[str, Any] | list[Any] | str, *, path
             headline=str(
                 candidate.get(
                     "headline",
-                    payload.get("headline", "Latest provider readiness artifact is available."),
+                    payload.get("headline", "最近一次数据源就绪 artifact 已可读取。"),
                 )
             ),
             body=str(
                 candidate.get(
                     "body",
-                    payload.get("body", f"Loaded persisted readiness data from `{path}`."),
+                    payload.get("body", f"已从 `{path}` 读取持久化 readiness 数据。"),
                 )
             ),
             next_steps=[str(step) for step in next_steps],
@@ -372,8 +372,8 @@ def _coerce_readiness_summary(payload: dict[str, Any] | list[Any] | str, *, path
 
     return ReadinessSummary(
         status="info",
-        headline="Latest provider readiness artifact is available.",
-        body=f"Loaded persisted readiness data from `{path}`.",
+        headline="最近一次数据源就绪 artifact 已可读取。",
+        body=f"已从 `{path}` 读取持久化 readiness 数据。",
         next_steps=[],
     )
 
@@ -986,13 +986,13 @@ def build_run_submission(config: BacktestRunConfig, run_requested: bool) -> RunS
 def latest_data_health_note(paths: AppPaths | None = None) -> str:
     summary = load_latest_validation_summary(paths=paths)
     if summary is None:
-        return "No validation results are available yet."
+        return "当前还没有可用的校验结果。"
     failed = summary.recent_results[
         ~summary.recent_results["status"].astype(str).str.lower().map(is_passing_validation_status)
     ]
     if failed.empty:
-        return "Latest validation samples are clean."
-    return f"{len(failed)} recent validation checks are not passing."
+        return "最近一批校验样本看起来是干净的。"
+    return f"最近有 {len(failed)} 条校验结果未通过。"
 
 
 def build_home_readiness_summary(
@@ -1004,15 +1004,14 @@ def build_home_readiness_summary(
     if not provider_capabilities:
         return ReadinessSummary(
             status="warning",
-            headline="No real provider data is available yet.",
+            headline="真实 provider 数据尚未就绪。",
             body=(
-                "The workbench can still browse demo artifacts, but the provider registry does not have "
-                "any capability rows yet."
+                "当前仍可浏览 demo artifacts，但 provider registry 里还没有能力登记记录。"
             ),
             next_steps=[
-                "Seed demo data for offline exploration.",
-                "Add provider credentials or a local bundle, then run a sync/backfill.",
-                "Return to Data Health after the first publish.",
+                "先写入 demo 数据，用于离线浏览页面。",
+                "补齐 provider 凭证或本地数据包后，再执行 Sync/Backfill。",
+                "第一次发布后，回到数据健康页面检查。",
             ],
         )
 
@@ -1024,53 +1023,49 @@ def build_home_readiness_summary(
     if not supports_minute_bars:
         return ReadinessSummary(
             status="warning",
-            headline="Provider access is not ready for minute-bar research.",
-            body=(
-                "The configured provider is registered, but it does not currently advertise minute bars."
-            ),
+            headline="当前 provider 还不具备分钟线研究条件。",
+            body="provider 已登记，但目前没有声明可用的 minute bars 能力。",
             next_steps=[
-                "Check the provider token, API key, or local bundle configuration.",
-                "Publish minute bars before trying a live-data backtest.",
+                "检查 provider token、API key 或本地数据包配置。",
+                "先发布 minute bars，再尝试真实数据回测。",
             ],
         )
 
     if not supports_security_status_history:
         return ReadinessSummary(
             status="warning",
-            headline="Provider permissions are missing security-status history.",
+            headline="缺少 security-status history 能力。",
             body=(
-                "Minute bars are available, but status-history-driven preflight and replay checks still "
-                "need that dataset."
+                "minute bars 已具备，但依赖状态历史的预检与复盘仍需要这份数据集。"
             ),
             next_steps=[
-                "Enable security-status history in the provider account or adapter.",
-                "Run validation again after the next publish.",
+                "在 provider 账号或 adapter 中启用 security-status history。",
+                "下次发布后，再重新执行校验。",
             ],
         )
 
     if validation_summary is None or not file_manifest:
         return ReadinessSummary(
             status="info",
-            headline="Provider looks ready, but no published datasets are visible yet.",
+            headline="provider 看起来已就绪，但还没有可浏览的数据。",
             body=(
-                "Capability rows are present, but the local registry still has no published data to browse."
+                "能力登记已经存在，但本地 registry 里还没有已发布数据。"
             ),
             next_steps=[
-                "Run the sync or backfill flow to publish data.",
-                "Use the seeded demo state if you want to explore the UI now.",
+                "先执行 Sync 或 Backfill 发布数据。",
+                "如果你现在只想浏览页面，可以先使用 demo 数据。",
             ],
         )
 
     return ReadinessSummary(
         status="success",
-        headline="Provider readiness looks good.",
+        headline="provider 就绪状态良好。",
         body=(
-            "Minute bars and security-status history are available, and the local registry already has "
-            "published datasets."
+            "minute bars 与 security-status history 都已具备，本地 registry 也已经有已发布数据。"
         ),
         next_steps=[
-            "Open Single Backtest, Parameter Scan, or Replay Diagnostics as needed.",
-            "Use Data Health to review validation samples.",
+            "接下来可进入单次回测、参数扫描或回放诊断。",
+            "也可以到数据健康页面复查校验样本。",
         ],
     )
 

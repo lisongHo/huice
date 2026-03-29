@@ -120,7 +120,7 @@ class _FakeStreamlit(SimpleNamespace):
     def write(self, *args) -> None:
         self.calls.append(("write", args))
 
-    def markdown(self, *args) -> None:
+    def markdown(self, *args, **kwargs) -> None:
         self.calls.append(("markdown", args))
 
     def json(self, *args, **kwargs) -> None:
@@ -197,12 +197,12 @@ def test_sync_cockpit_page_prepares_request_before_any_execution(tmp_path: Path,
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dry-run planning should not run")),
     )
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_Sync_Cockpit.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_同步驾驶舱.py", run_name="__main__")
 
     assert any(call[0] == "success" and "Saved readiness is available." in call[1][0] for call in fake_streamlit.calls)
     assert fake_streamlit.session_state["quantlab_pending_sync_request"]["workflow"] == "backfill"
     assert "quantlab_last_sync_execution" not in fake_streamlit.session_state
-    assert next(call for call in fake_streamlit.calls if call[0] == "subheader")[1][0] == "Latest saved provider readiness"
+    assert next(call for call in fake_streamlit.calls if call[0] == "subheader")[1][0] == "最近一次数据源就绪检查"
 
 
 def test_sync_cockpit_page_runs_dry_run_only_after_click(tmp_path: Path, monkeypatch) -> None:
@@ -210,7 +210,7 @@ def test_sync_cockpit_page_runs_dry_run_only_after_click(tmp_path: Path, monkeyp
     import app.ui.forms as forms
     import data.ingest.sync as sync
 
-    fake_streamlit = _FakeStreamlit(button_results={"Run dry-run plan": True})
+    fake_streamlit = _FakeStreamlit(button_results={"执行 dry-run 规划": True})
     readiness = _ReadinessSummary(
         status="info",
         headline="Saved readiness is visible.",
@@ -264,7 +264,7 @@ def test_sync_cockpit_page_runs_dry_run_only_after_click(tmp_path: Path, monkeyp
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh planning should not run")),
     )
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_Sync_Cockpit.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_同步驾驶舱.py", run_name="__main__")
 
     assert called and called[0][0] == "backfill"
     assert fake_streamlit.session_state["quantlab_last_sync_execution"]["action"] == "dry-run"
@@ -278,7 +278,7 @@ def test_sync_cockpit_page_runs_real_execution_only_when_hook_exists(tmp_path: P
     import app.ui.workbench as workbench
     import data.ingest.sync as sync
 
-    fake_streamlit = _FakeStreamlit(button_results={"Run sync execution": True})
+    fake_streamlit = _FakeStreamlit(button_results={"执行真实同步": True})
     readiness = _ReadinessSummary(
         status="warning",
         headline="Saved readiness needs attention.",
@@ -322,7 +322,7 @@ def test_sync_cockpit_page_runs_real_execution_only_when_hook_exists(tmp_path: P
     monkeypatch.setattr(sync, "build_backfill_plan", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("backfill should not run")))
     monkeypatch.setattr(sync, "build_refresh_plan", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("refresh should not run")))
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_Sync_Cockpit.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_同步驾驶舱.py", run_name="__main__")
 
     assert executed and executed[0]["workflow"] == "daily-refresh"
     assert fake_streamlit.session_state["quantlab_last_sync_execution"]["action"] == "execute"
@@ -396,7 +396,7 @@ def test_sync_cockpit_page_browses_saved_sync_runs_without_a_runner_hook(
         ),
     )
 
-    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_Sync_Cockpit.py", run_name="__main__")
+    runpy.run_path(Path(__file__).resolve().parents[2] / "app/pages/6_同步驾驶舱.py", run_name="__main__")
 
     assert any(call[0] == "info" and "No sync runner hook is available yet" in call[1][0] for call in fake_streamlit.calls)
     assert any(call[0] == "dataframe" for call in fake_streamlit.calls)

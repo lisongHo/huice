@@ -114,8 +114,8 @@ def test_latest_validation_summary_aggregates_status_and_severity_counts(tmp_pat
         "error": 3,
         "warning": 1,
     }
-    assert latest_data_health_note(paths) == "3 recent validation checks are not passing."
-    assert home_data.data_health_note == "3 recent validation checks are not passing."
+    assert latest_data_health_note(paths) == "最近有 3 条校验结果未通过。"
+    assert home_data.data_health_note == "最近有 3 条校验结果未通过。"
     assert [item.check_name for item in home_data.validation_results] == [
         "duplicate_minute_key",
         "invalid_session_time",
@@ -147,7 +147,7 @@ def test_latest_validation_summary_treats_pass_and_passed_as_the_same_status(tmp
         "pass": 2,
         "failed": 1,
     }
-    assert latest_data_health_note(paths) == "1 recent validation checks are not passing."
+    assert latest_data_health_note(paths) == "最近有 1 条校验结果未通过。"
 
 
 def test_home_page_loader_reports_preflight_when_real_data_is_missing(tmp_path: Path) -> None:
@@ -158,8 +158,8 @@ def test_home_page_loader_reports_preflight_when_real_data_is_missing(tmp_path: 
     home_data = load_home_page_data(paths, limit=5)
 
     assert home_data.readiness_summary.status == "warning"
-    assert "No real provider data" in home_data.readiness_summary.headline
-    assert any("seed demo data" in step.lower() for step in home_data.readiness_summary.next_steps)
+    assert "真实 provider 数据" in home_data.readiness_summary.headline
+    assert any("demo" in step.lower() or "demo" in step for step in home_data.readiness_summary.next_steps)
 
 
 def test_home_page_loader_reports_missing_provider_permissions(tmp_path: Path) -> None:
@@ -217,8 +217,8 @@ def test_latest_saved_readiness_summary_infers_permission_gap_from_raw_tushare_p
 
     assert summary is not None
     assert summary.status == "warning"
-    assert "minute" in summary.headline.lower()
-    assert any("permission" in step.lower() for step in summary.next_steps)
+    assert "分钟" in summary.headline
+    assert any("权限" in step for step in summary.next_steps)
 
 
 def test_latest_readiness_artifact_prefers_most_recent_saved_file(tmp_path: Path) -> None:
