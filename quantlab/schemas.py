@@ -26,6 +26,12 @@ class RunStatus(str, Enum):
     FAILED = "failed"
 
 
+class SyncWorkflow(str, Enum):
+    BACKFILL = "backfill"
+    DAILY_REFRESH = "daily-refresh"
+    WEEKLY_MAINTENANCE = "weekly-maintenance"
+
+
 class StrategyTimingMode(str, Enum):
     DEFAULT_CONTROL = "default_control"
     EXPERIMENTAL_SAME_DAY_PROXY = "experimental_same_day_proxy"
@@ -166,6 +172,29 @@ class RunArtifactManifest(BaseModel):
     drawdown_curve_path: str
     trades_path: str
     annual_returns_path: str | None = None
+
+
+class SyncRunRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sync_run_id: str = Field(default_factory=lambda: uuid4().hex)
+    workflow: SyncWorkflow
+    start_date: date | None = None
+    end_date: date | None = None
+    config_path: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+class SyncArtifactManifest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sync_run_id: str
+    workflow: SyncWorkflow
+    status: RunStatus = RunStatus.CREATED
+    request_path: str
+    summary_path: str
+    validation_path: str | None = None
 
 
 class TradeRecord(BaseModel):

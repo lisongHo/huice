@@ -65,12 +65,20 @@ create table if not exists scan_batches (
     created_at timestamp not null,
     result_path varchar not null
 );
+
+create table if not exists sync_runs (
+    sync_run_id varchar primary key,
+    workflow varchar not null,
+    status varchar not null,
+    requested_at timestamp not null,
+    completed_at timestamp,
+    summary_path varchar not null,
+    artifact_dir varchar not null
+);
 """
 
 
 def bootstrap_registry(registry_path: Path) -> None:
     registry_path.parent.mkdir(parents=True, exist_ok=True)
-    if registry_path.exists():
-        return
     with duckdb.connect(str(registry_path)) as connection:
         connection.execute(BOOTSTRAP_SQL)

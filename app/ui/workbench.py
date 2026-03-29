@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -26,6 +26,15 @@ PROVIDER_READINESS_RUNNER_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("reports", "run_provider_readiness_check"),
     ("reports.readiness", "run_provider_readiness_check"),
     ("scripts.provider_readiness", "run_provider_readiness_check"),
+)
+
+SYNC_RUNNER_CANDIDATES: tuple[tuple[str, str], ...] = (
+    ("reports", "run_sync"),
+    ("reports.artifacts", "run_sync"),
+    ("data.ingest.sync", "run_sync"),
+    ("data.ingest.sync", "execute_sync_request"),
+    ("scripts.sync_tushare_backfill", "run_sync"),
+    ("scripts.sync_tushare_refresh", "run_sync"),
 )
 
 
@@ -62,6 +71,24 @@ class ProviderReadinessExecutionResult:
     message: str
     payload: Any | None = None
     artifact_path: str | None = None
+
+
+@dataclass(slots=True)
+class SyncRunnerProbe:
+    available: bool
+    message: str
+    runner_name: str | None = None
+    runner: Callable[..., Any] | None = None
+
+
+@dataclass(slots=True)
+class SyncExecutionResult:
+    success: bool
+    message: str
+    paths: AppPaths
+    payload: Any | None = None
+    artifact_path: str | None = None
+    sync_run_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -203,6 +230,26 @@ def detect_provider_readiness_runner() -> ProviderReadinessProbe:
     )
 
 
+def detect_sync_runner() -> SyncRunnerProbe:
+    for module_name, function_name in SYNC_RUNNER_CANDIDATES:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        runner = getattr(module, function_name, None)
+        if callable(runner):
+            return SyncRunnerProbe(
+                available=True,
+                message=f"Detected sync runner hook: {module_name}.{function_name}",
+                runner_name=f"{module_name}.{function_name}",
+                runner=runner,
+            )
+    return SyncRunnerProbe(
+        available=False,
+        message="No sync runner hook is available yet. You can still browse saved sync runs and plan dry-runs.",
+    )
+
+
 def execute_parameter_scan(
     request: dict[str, Any],
     root: Path | None = None,
@@ -316,12 +363,89 @@ def execute_provider_readiness_check(root: Path | None = None) -> ProviderReadin
     )
 
 
+def execute_sync_request(
+    request: dict[str, Any],
+    root: Path | None = None,
+) -> SyncExecutionResult:
+    probe = detect_sync_runner()
+    paths = build_execution_paths(root)
+    if not probe.available or probe.runner is None:
+        return SyncExecutionResult(
+            success=False,
+            message=probe.message,
+            paths=paths,
+        )
+
+    execution_request = dict(request)
+    execution_request["dry_run"] = False
+    runner = probe.runner
+    attempts: tuple[Callable[[], Any], ...] = (
+        lambda: runner(paths, execution_request),
+        lambda: runner(execution_request, paths),
+        lambda: runner(paths=paths, request=execution_request),
+        lambda: runner(request=execution_request, paths=paths),
+        lambda: runner(execution_request),
+    )
+    last_error: Exception | None = None
+    for attempt in attempts:
+        try:
+            payload = attempt()
+            coerced_payload = _coerce_sync_execution_payload(payload)
+            message = "Sync execution completed."
+            sync_run_id = None
+            artifact_path = None
+            success = True
+            if isinstance(coerced_payload, dict):
+                message = str(coerced_payload.get("message", message))
+                sync_run_id = coerced_payload.get("sync_run_id") or coerced_payload.get("run_id")
+                artifact_path = coerced_payload.get("artifact_path") or coerced_payload.get("summary_path")
+                if "success" in coerced_payload:
+                    success = bool(coerced_payload["success"])
+            return SyncExecutionResult(
+                success=success,
+                message=message,
+                paths=paths,
+                payload=coerced_payload,
+                artifact_path=str(artifact_path) if artifact_path is not None else None,
+                sync_run_id=str(sync_run_id) if sync_run_id is not None else None,
+            )
+        except TypeError as exc:
+            last_error = exc
+            continue
+        except Exception as exc:
+            return SyncExecutionResult(
+                success=False,
+                message=f"Sync execution failed: {exc}",
+                paths=paths,
+            )
+
+    return SyncExecutionResult(
+        success=False,
+        message=(
+            "Sync runner signature was not recognized."
+            if last_error is None
+            else f"Sync runner signature was not recognized: {last_error}"
+        ),
+        paths=paths,
+    )
+
+
 def _coerce_scan_batch_result(payload: Any) -> ScanBatchResult:
     if isinstance(payload, ScanBatchResult):
         return payload
     if isinstance(payload, dict):
         return ScanBatchResult.model_validate(payload)
     raise TypeError(f"Unsupported parameter scan payload type: {type(payload)!r}")
+
+
+def _coerce_sync_execution_payload(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        return payload
+    if hasattr(payload, "model_dump"):
+        return dict(payload.model_dump(mode="json"))  # type: ignore[call-arg]
+    if is_dataclass(payload):
+        return asdict(payload)
+    return payload
 
 
 def _has_market_data(paths: AppPaths) -> bool:

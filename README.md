@@ -68,7 +68,7 @@ The Streamlit workbench currently ships with six pages:
 - `Parameter Scan` at `app/pages/3_Parameter_Scan.py`: prepares scan grids explicitly, checks for a scan runner hook, and browses persisted scan batches.
 - `Replay Diagnostics` at `app/pages/4_Replay_Diagnostics.py`: inspects saved run artifacts, equity curves, and trade-level diagnostics.
 - `Provider Readiness` at `app/pages/5_Provider_Readiness.py`: runs the readiness preflight only when you click the button and saves the latest result for later review.
-- `Sync Cockpit` at `app/pages/6_Sync_Cockpit.py`: prepares explicit dry-run sync requests, shows the latest saved readiness snapshot first, and explains provider blockers with actionable next steps.
+- `Sync Cockpit` at `app/pages/6_Sync_Cockpit.py`: prepares explicit sync requests, supports both dry-run planning and real execution on button click, shows the latest saved readiness snapshot first, and browses saved sync runs with actionable provider blocker guidance.
 
 The UI is intentionally request-driven. Changing widgets should prepare a draft; execution happens only from explicit script or button paths.
 
@@ -82,4 +82,4 @@ The UI is intentionally request-driven. Changing widgets should prepare a draft;
 - Streamlit multi-page workbench with Home, Data Health, Single Backtest, Parameter Scan, and Replay Diagnostics pages
 - local demo seed and single-run scripts that do not require provider credentials
 - readiness/preflight messaging for real-data setup, including persisted readiness history
-- explicit dry-run sync planning with actionable provider blocker diagnostics
+- explicit sync planning and execution with persisted sync-run artifacts and actionable provider blocker diagnostics

@@ -21,6 +21,7 @@ def ensure_state_dirs(paths: AppPaths) -> None:
         paths.lake_root,
         paths.lake_root / "minute_bars",
         readiness_root(paths),
+        sync_runs_root(paths),
         paths.runs_root,
     ):
         directory.mkdir(parents=True, exist_ok=True)
@@ -48,3 +49,11 @@ def readiness_artifact_path(paths: AppPaths) -> Path:
 
 def readiness_snapshot_path(paths: AppPaths, snapshot_name: str) -> Path:
     return readiness_root(paths) / snapshot_name
+
+
+def sync_runs_root(paths: AppPaths) -> Path:
+    return paths.local_state_dir / "sync_runs"
+
+
+def sync_run_dir(paths: AppPaths, sync_run_id: str) -> Path:
+    return sync_runs_root(paths) / sync_run_id

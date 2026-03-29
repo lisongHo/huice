@@ -11,8 +11,8 @@ import pandas as pd
 
 from quantlab.config import AppPaths
 from quantlab.registry import bootstrap_registry
-from quantlab.schemas import BacktestRunConfig, RunArtifactManifest, RunStatus
-from quantlab.storage import ARTIFACT_FILE_NAMES, run_dir
+from quantlab.schemas import BacktestRunConfig, RunArtifactManifest, RunStatus, SyncArtifactManifest
+from quantlab.storage import ARTIFACT_FILE_NAMES, run_dir, sync_run_dir
 from quantlab.strategies.builtin import BUILTIN_STRATEGY_NAME, default_strategy_params
 from reports import ScanBatchResult
 
@@ -67,6 +67,19 @@ def _read_frame(path: Path) -> pd.DataFrame:
             return pd.DataFrame(payload)
         return pd.DataFrame([payload])
     return pd.DataFrame()
+
+
+def _read_artifact_payload(path: Path) -> dict[str, Any] | list[Any] | str | None:
+    if not path.exists():
+        return None
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return _read_json_file(path)
+    if suffix == ".csv":
+        return _read_frame(path).to_dict(orient="records")
+    if suffix == ".parquet":
+        return _read_frame(path).to_dict(orient="records")
+    return path.read_text(encoding="utf-8")
 
 
 @dataclass(slots=True)
@@ -168,6 +181,34 @@ class ScanBatchSummary:
     best_return_pct: float | None
     source_label: str
     result_path: str
+
+
+@dataclass(slots=True)
+class SyncRunRecord:
+    sync_run_id: str
+    workflow: str
+    status: RunStatus | str
+    requested_at: datetime | None
+    completed_at: datetime | None
+    summary_path: str
+    artifact_dir: str
+    source_label: str = "app"
+
+
+@dataclass(slots=True)
+class SyncRunArtifact:
+    sync_run_id: str
+    workflow: str | None
+    status: RunStatus | str | None
+    artifact_dir: str
+    manifest: SyncArtifactManifest | None
+    request_path: str | None
+    summary_path: str | None
+    validation_path: str | None
+    request_payload: dict[str, Any] | list[Any] | str | None
+    summary_payload: dict[str, Any] | list[Any] | str | None
+    validation_payload: dict[str, Any] | list[Any] | str | None
+    source_label: str = "app"
 
 
 @dataclass(slots=True)
@@ -702,6 +743,123 @@ def load_scan_batch_result_from_sources(scan_batch_id: str, root: Path | None = 
         batch = _read_scan_batch_result(result_path)
         if batch is not None:
             return batch
+    return None
+
+
+def load_recent_sync_runs(limit: int = 25, root: Path | None = None) -> list[SyncRunRecord]:
+    summaries: list[SyncRunRecord] = []
+    for source_label, paths in get_browse_paths(root):
+        if not paths.registry_path.exists():
+            continue
+        bootstrap_registry(paths.registry_path)
+        frame = _registry_frame(
+            f"""
+            select
+                sync_run_id,
+                workflow,
+                status,
+                requested_at,
+                completed_at,
+                summary_path,
+                artifact_dir
+            from sync_runs
+            order by coalesce(completed_at, requested_at) desc, requested_at desc
+            limit {int(limit)}
+            """,
+            paths=paths,
+        )
+        for row in frame.itertuples(index=False):
+            summaries.append(
+                SyncRunRecord(
+                    sync_run_id=str(row.sync_run_id),
+                    workflow=str(row.workflow),
+                    status=_as_run_status(row.status),
+                    requested_at=_as_datetime(row.requested_at),
+                    completed_at=_as_datetime(row.completed_at),
+                    summary_path=str(row.summary_path),
+                    artifact_dir=str(row.artifact_dir),
+                    source_label=source_label,
+                )
+            )
+    summaries.sort(key=lambda item: item.completed_at or item.requested_at or datetime.min, reverse=True)
+    return summaries[:limit]
+
+
+def load_sync_run_artifact_from_sources(sync_run_id: str, root: Path | None = None) -> SyncRunArtifact | None:
+    for source_label, paths in get_browse_paths(root):
+        if not paths.registry_path.exists():
+            continue
+        frame = _registry_frame(
+            """
+            select
+                sync_run_id,
+                workflow,
+                status,
+                requested_at,
+                completed_at,
+                summary_path,
+                artifact_dir
+            from sync_runs
+            where sync_run_id = ?
+            """.replace("?", f"'{sync_run_id}'"),
+            paths=paths,
+        )
+        if frame.empty:
+            continue
+
+        row = frame.iloc[0]
+        artifact_dir_value = str(row["artifact_dir"])
+        artifact_dir_path = (
+            _resolve_path(artifact_dir_value, paths.workspace_root)
+            if artifact_dir_value
+            else sync_run_dir(paths, sync_run_id)
+        )
+        if not artifact_dir_path.exists():
+            continue
+
+        manifest_path = artifact_dir_path / "manifest.json"
+        manifest_payload = _read_json_file(manifest_path)
+        manifest = SyncArtifactManifest.model_validate(manifest_payload) if isinstance(manifest_payload, dict) else None
+
+        request_path = (
+            _resolve_path(manifest.request_path, artifact_dir_path)
+            if manifest is not None
+            else artifact_dir_path / "request.json"
+        )
+        summary_path = (
+            _resolve_path(manifest.summary_path, artifact_dir_path)
+            if manifest is not None
+            else _resolve_path(str(row["summary_path"]), artifact_dir_path)
+        )
+        validation_path = None
+        if manifest is not None and manifest.validation_path is not None:
+            validation_path = _resolve_path(manifest.validation_path, artifact_dir_path)
+        else:
+            candidate_validation = artifact_dir_path / "validation.json"
+            if candidate_validation.exists():
+                validation_path = candidate_validation
+
+        request_payload = _read_artifact_payload(request_path) if request_path.exists() else None
+        summary_payload = _read_artifact_payload(summary_path) if summary_path.exists() else None
+        validation_payload = _read_artifact_payload(validation_path) if validation_path is not None and validation_path.exists() else None
+
+        if manifest is None and request_payload is None and summary_payload is None and validation_payload is None:
+            continue
+
+        return SyncRunArtifact(
+            sync_run_id=str(row["sync_run_id"]),
+            workflow=str(manifest.workflow.value if manifest is not None else row["workflow"]),
+            status=_as_run_status(manifest.status.value if manifest is not None else row["status"]),
+            artifact_dir=str(artifact_dir_path),
+            manifest=manifest,
+            request_path=str(request_path) if request_path.exists() else None,
+            summary_path=str(summary_path) if summary_path.exists() else None,
+            validation_path=str(validation_path) if validation_path is not None and validation_path.exists() else None,
+            request_payload=request_payload,
+            summary_payload=summary_payload,
+            validation_payload=validation_payload,
+            source_label=source_label,
+        )
     return None
 
 

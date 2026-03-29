@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import pandas as pd
 
@@ -25,6 +25,7 @@ from data.store.duckdb_registry import (
 )
 from data.store.parquet_store import read_dataset, write_dataset
 from quantlab.config import AppPaths
+from quantlab.schemas import SyncRunRequest, SyncWorkflow
 from quantlab.storage import ensure_state_dirs
 
 REFERENCE_DATASETS: tuple[str, ...] = ("security_master", "trade_calendar")
@@ -77,6 +78,18 @@ class SyncRunSummary:
     reference_sync: dict[str, int]
     minute_windows: tuple[dict[str, object], ...]
     gap_scan: GapScanResult | None = None
+
+
+@dataclass(frozen=True)
+class SyncExecutionResult:
+    request: SyncRunRequest
+    request_payload: dict[str, object]
+    summary_payload: dict[str, object]
+    error: Exception | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.error is None
 
 
 def build_provider(config_path: Path | None = None) -> TushareProProvider:
@@ -283,6 +296,64 @@ def run_refresh(
         reference_sync=reference_summary,
         minute_windows=minute_windows,
         gap_scan=plan.gap_scan,
+    )
+
+
+def coerce_sync_run_request(payload: SyncRunRequest | Mapping[str, object]) -> SyncRunRequest:
+    if isinstance(payload, SyncRunRequest):
+        return payload
+    return SyncRunRequest.model_validate(payload)
+
+
+def sync_run_request_to_dict(request: SyncRunRequest) -> dict[str, object]:
+    return request.model_dump(mode="json")
+
+
+def execute_sync_request(
+    paths: AppPaths,
+    request_payload: SyncRunRequest | Mapping[str, object],
+) -> SyncExecutionResult:
+    request = coerce_sync_run_request(request_payload)
+    payload = sync_run_request_to_dict(request)
+
+    try:
+        if request.workflow is SyncWorkflow.BACKFILL:
+            if request.start_date is None or request.end_date is None:
+                raise TushareConfigurationError("backfill requests require start_date and end_date")
+            result = run_backfill(
+                paths=paths,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                config_path=Path(request.config_path) if request.config_path else None,
+                symbols=request.symbols,
+                dry_run=request.dry_run,
+            )
+        else:
+            result = run_refresh(
+                paths=paths,
+                end_date=request.end_date,
+                workflow=request.workflow.value,
+                config_path=Path(request.config_path) if request.config_path else None,
+                symbols=request.symbols,
+                dry_run=request.dry_run,
+            )
+    except Exception as exc:
+        return SyncExecutionResult(
+            request=request,
+            request_payload=payload,
+            summary_payload=_sync_failure_payload(request=request, exc=exc),
+            error=exc,
+        )
+
+    if isinstance(result, SyncPlan):
+        summary_payload = _sync_plan_payload(request=request, plan=result)
+    else:
+        summary_payload = _sync_run_summary_payload(request=request, summary=result)
+
+    return SyncExecutionResult(
+        request=request,
+        request_payload=payload,
+        summary_payload=summary_payload,
     )
 
 
@@ -555,6 +626,45 @@ def sync_run_summary_to_dict(summary: SyncRunSummary) -> dict[str, object]:
             "issues": [asdict(issue) for issue in summary.gap_scan.issues],
         }
     return payload
+
+
+def _sync_plan_payload(request: SyncRunRequest, plan: SyncPlan) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "workflow": request.workflow.value,
+        "status": "planned" if request.dry_run else "completed",
+        "reference_sync": {},
+        "minute_windows": sync_plan_to_dict(plan)["windows"],
+    }
+    if plan.gap_scan is not None:
+        payload["gap_scan"] = {
+            **asdict(plan.gap_scan),
+            "issues": [asdict(issue) for issue in plan.gap_scan.issues],
+        }
+    return payload
+
+
+def _sync_run_summary_payload(request: SyncRunRequest, summary: SyncRunSummary) -> dict[str, object]:
+    payload = sync_run_summary_to_dict(summary)
+    payload["workflow"] = request.workflow.value
+    payload["status"] = "planned" if request.dry_run else "completed"
+    return payload
+
+
+def _sync_failure_payload(request: SyncRunRequest, exc: Exception) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "workflow": request.workflow.value,
+        "status": "failed",
+        "reference_sync": {},
+        "minute_windows": (),
+        "error_type": exc.__class__.__name__,
+        "error": _error_message(exc),
+    }
+    return payload
+
+
+def _error_message(exc: Exception) -> str:
+    message = str(exc).strip()
+    return message or exc.__class__.__name__
 
 
 def json_dump(data: object) -> str:
