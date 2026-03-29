@@ -24,7 +24,14 @@ from quantlab.schemas import (
     RunStatus,
     TradeRecord,
 )
-from quantlab.storage import ARTIFACT_FILE_NAMES, ensure_state_dirs, readiness_artifact_path, run_dir
+from quantlab.storage import (
+    ARTIFACT_FILE_NAMES,
+    ensure_state_dirs,
+    readiness_artifact_path,
+    readiness_root,
+    readiness_snapshot_path,
+    run_dir,
+)
 
 _REPLAY_DIAGNOSTICS_FILE_NAME = "replay_diagnostics.json"
 _TRADE_SLICES_FILE_NAME = "trade_slices.parquet"
@@ -75,6 +82,14 @@ def _artifact_path(artifact_dir: Path, artifact_name: str) -> Path:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _readiness_snapshot_timestamp() -> datetime:
+    return datetime.now(UTC)
+
+
+def _readiness_snapshot_name(timestamp: datetime) -> str:
+    return timestamp.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ.json")
 
 
 def _write_records_parquet(path: Path, records: list[Any], model_type: type[Any]) -> None:
@@ -300,6 +315,8 @@ def persist_latest_readiness_payload(paths: AppPaths, payload: dict[str, Any]) -
     ensure_state_dirs(paths)
     artifact_path = readiness_artifact_path(paths)
     artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    snapshot_name = _readiness_snapshot_name(_readiness_snapshot_timestamp())
+    readiness_snapshot_path(paths, snapshot_name).write_text(json.dumps(payload, indent=2, sort_keys=True))
     return artifact_path
 
 
@@ -308,6 +325,17 @@ def load_latest_readiness_payload(paths: AppPaths) -> dict[str, Any] | None:
     if not artifact_path.exists():
         return None
     return json.loads(artifact_path.read_text())
+
+
+def load_recent_readiness_artifacts(paths: AppPaths, *, limit: int = 10) -> list[tuple[Path, dict[str, Any]]]:
+    ensure_state_dirs(paths)
+    snapshot_paths = [
+        path
+        for path in readiness_root(paths).glob("*.json")
+        if path.name != "latest.json"
+    ]
+    snapshot_paths.sort(key=lambda path: path.name, reverse=True)
+    return [(path, json.loads(path.read_text())) for path in snapshot_paths[:limit]]
 
 
 def run_provider_readiness_check(

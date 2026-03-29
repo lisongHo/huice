@@ -44,6 +44,16 @@ class TushareReadinessReport:
     endpoint_probes: tuple[TushareEndpointProbeResult, ...]
 
 
+@dataclass(frozen=True)
+class TusharePlanningBlocker:
+    key: str
+    headline: str
+    body: str
+    next_steps: tuple[str, ...]
+    error_type: str
+    error_message: str
+
+
 def collect_tushare_readiness(
     config_path: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -134,6 +144,79 @@ def collect_tushare_readiness(
 
 def tushare_readiness_to_dict(report: TushareReadinessReport) -> dict[str, object]:
     return asdict(report)
+
+
+def classify_tushare_planning_blocker(exc: Exception) -> TusharePlanningBlocker | None:
+    error_type = exc.__class__.__name__
+    error_message = str(exc).strip()
+    haystack = f"{error_type}: {error_message}".casefold()
+
+    if "token is missing" in haystack or "rejected the token" in haystack:
+        return TusharePlanningBlocker(
+            key="token_missing",
+            headline="Tushare token is missing.",
+            body="The sync planner could not continue because no token is configured for the Tushare provider.",
+            next_steps=(
+                "Set TUSHARE_TOKEN or create configs/provider.toml from configs/provider.example.toml.",
+                "Re-run the backfill or refresh dry-run after the token is configured.",
+            ),
+            error_type=error_type,
+            error_message=error_message,
+        )
+
+    if "unable to reach tushare api" in haystack:
+        return TusharePlanningBlocker(
+            key="network_unreachable",
+            headline="Tushare API could not be reached.",
+            body="The planner could not contact the configured Tushare API endpoint, which usually means a network, DNS, or proxy problem.",
+            next_steps=(
+                "Confirm the machine has network access to the Tushare API endpoint.",
+                "Verify TUSHARE_API_URL and any proxy or firewall settings.",
+                "Re-run the dry-run once the upstream path is reachable.",
+            ),
+            error_type=error_type,
+            error_message=error_message,
+        )
+
+    if "trade calendar access is unavailable" in haystack or "trade_cal" in haystack:
+        return TusharePlanningBlocker(
+            key="trade_calendar_inaccessible",
+            headline="Trade calendar access is unavailable for this token.",
+            body="The planner can see the token, but the trade_cal endpoint is not allowed for it.",
+            next_steps=(
+                "Grant the token access to the trade_cal endpoint in Tushare.",
+                "Re-run the readiness check or sync dry-run after permissions are updated.",
+            ),
+            error_type=error_type,
+            error_message=error_message,
+        )
+
+    if "minute-data permission is missing" in haystack or "stk_mins" in haystack:
+        return TusharePlanningBlocker(
+            key="minute_permission_missing",
+            headline="Minute-data permission is missing for this token.",
+            body="The planner can see the token, but the stk_mins endpoint is blocked for minute bars.",
+            next_steps=(
+                "Enable the Tushare minute-data permission for this token.",
+                "Re-run the readiness check or sync dry-run after the permission change.",
+            ),
+            error_type=error_type,
+            error_message=error_message,
+        )
+
+    return None
+
+
+def format_tushare_planning_blocker(
+    blocker: TusharePlanningBlocker,
+    *,
+    workflow: str,
+    dry_run: bool,
+) -> str:
+    mode = "dry-run planning" if dry_run else "planning"
+    lines = [f"{workflow.title()} {mode} blocked: {blocker.headline}", f"Reason: {blocker.body}", "Next steps:"]
+    lines.extend(f"- {step}" for step in blocker.next_steps)
+    return "\n".join(lines)
 
 
 def _probe_query(

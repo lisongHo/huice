@@ -52,15 +52,23 @@ Before running a full sync, use the lightweight Tushare preflight:
 
 It checks whether the local config is visible plus whether `trade_cal`, `stock_basic`, and `stk_mins` are accessible for the current token.
 
+To persist the latest provider check for the UI and keep a timestamped readiness history, run:
+
+```bash
+.venv/bin/python -m scripts.tushare_preflight --reference-date 2026-03-28 --persist
+```
+
 ## UI Pages
 
-The Streamlit workbench currently ships with five pages:
+The Streamlit workbench currently ships with six pages:
 
 - `Home` at `app/Home.py`: shows the readiness preflight, template defaults, latest validation summary, recent runs, scan batches, experiment-library entries, and workspace paths.
 - `Single Backtest` at `app/pages/1_Single_Backtest.py`: prepares an explicit run request snapshot and browses persisted artifacts from completed runs.
 - `Data Health` at `app/pages/2_Data_Health.py`: reads validation samples, file manifests, and provider capability rows from the registry.
 - `Parameter Scan` at `app/pages/3_Parameter_Scan.py`: prepares scan grids explicitly, checks for a scan runner hook, and browses persisted scan batches.
 - `Replay Diagnostics` at `app/pages/4_Replay_Diagnostics.py`: inspects saved run artifacts, equity curves, and trade-level diagnostics.
+- `Provider Readiness` at `app/pages/5_Provider_Readiness.py`: runs the readiness preflight only when you click the button and saves the latest result for later review.
+- `Sync Cockpit` at `app/pages/6_Sync_Cockpit.py`: prepares explicit dry-run sync requests, shows the latest saved readiness snapshot first, and explains provider blockers with actionable next steps.
 
 The UI is intentionally request-driven. Changing widgets should prepare a draft; execution happens only from explicit script or button paths.
 
@@ -73,4 +81,5 @@ The UI is intentionally request-driven. Changing widgets should prepare a draft;
 - immutable run artifacts: config, metrics, equity, drawdown, trades, annual returns
 - Streamlit multi-page workbench with Home, Data Health, Single Backtest, Parameter Scan, and Replay Diagnostics pages
 - local demo seed and single-run scripts that do not require provider credentials
-- readiness/preflight messaging for real-data setup
+- readiness/preflight messaging for real-data setup, including persisted readiness history
+- explicit dry-run sync planning with actionable provider blocker diagnostics

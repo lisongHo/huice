@@ -44,3 +44,7 @@ def readiness_root(paths: AppPaths) -> Path:
 
 def readiness_artifact_path(paths: AppPaths) -> Path:
     return readiness_root(paths) / "latest.json"
+
+
+def readiness_snapshot_path(paths: AppPaths, snapshot_name: str) -> Path:
+    return readiness_root(paths) / snapshot_name

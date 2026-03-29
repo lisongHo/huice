@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
@@ -19,6 +20,13 @@ class BacktestSubmissionDraft:
 
 @dataclass(slots=True)
 class ScanRequestDraft:
+    submitted: bool
+    payload: dict[str, Any]
+    summary: dict[str, Any]
+
+
+@dataclass(slots=True)
+class SyncCockpitSubmissionDraft:
     submitted: bool
     payload: dict[str, Any]
     summary: dict[str, Any]
@@ -243,6 +251,66 @@ def render_parameter_scan_form(
         "combination_count": combination_count,
     }
     return ScanRequestDraft(
+        submitted=submitted,
+        payload=payload,
+        summary=summary,
+    )
+
+
+def render_sync_cockpit_form() -> SyncCockpitSubmissionDraft:
+    workflow_options = ["backfill", "daily-refresh", "weekly-maintenance"]
+    today = date.today()
+    with st.form("sync_cockpit_config", clear_on_submit=False):
+        st.caption("Prepare a dry-run sync plan, then execute it explicitly from the right-hand panel.")
+        workflow = st.selectbox(
+            "Planning mode",
+            options=workflow_options,
+            index=0,
+            format_func=lambda value: value.replace("-", " ").title(),
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            if workflow == "backfill":
+                start_date = st.date_input("Start date", value=today - timedelta(days=4))
+            else:
+                start_date = None
+            end_date = st.date_input("End date", value=today)
+        with col2:
+            config_path = st.text_input("Config path", value="", help="Optional Tushare provider config TOML path.")
+            symbols_text = st.text_area(
+                "Symbols",
+                value="",
+                height=96,
+                help="Optional comma-separated A-share symbols for explicit planning.",
+            )
+
+        submitted = st.form_submit_button("Prepare dry-run request", type="primary")
+
+    symbols = [value.strip() for value in symbols_text.split(",") if value.strip()]
+    payload: dict[str, Any] = {
+        "workflow": workflow,
+        "config_path": config_path.strip() or None,
+        "symbols": symbols,
+    }
+    if workflow == "backfill":
+        payload["start_date"] = str(start_date)
+        payload["end_date"] = str(end_date)
+        summary = {
+            "workflow": "backfill",
+            "window": f"{start_date} to {end_date}",
+            "symbol_count": len(symbols),
+            "config_path": config_path.strip() or "default provider config",
+        }
+    else:
+        payload["end_date"] = str(end_date)
+        summary = {
+            "workflow": workflow,
+            "window": f"ending {end_date}",
+            "symbol_count": len(symbols),
+            "config_path": config_path.strip() or "default provider config",
+        }
+
+    return SyncCockpitSubmissionDraft(
         submitted=submitted,
         payload=payload,
         summary=summary,

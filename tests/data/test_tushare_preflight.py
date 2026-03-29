@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from data.providers import tushare_provider as provider_module
-from data.providers.tushare_provider import TushareConfig, TushareConfigurationError, TushareHttpClient
+from data.providers.tushare_provider import TushareConfig, TushareConfigurationError, TushareHttpClient, TushareRequestError
 
 
 @dataclass(frozen=True)
@@ -172,3 +172,94 @@ def test_tushare_preflight_cli_persists_latest_readiness_payload_and_prints_json
     assert payload == json.loads(json.dumps(tushare_readiness_to_dict(report), default=str))
     assert persisted["payload"] == tushare_readiness_to_dict(report)
     assert persisted["paths"] is not None
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_key", "headline_fragment", "step_fragment"),
+    [
+        (
+            TushareConfigurationError(
+                "Tushare token is missing. Set TUSHARE_TOKEN or create configs/provider.toml from configs/provider.example.toml."
+            ),
+            "token_missing",
+            "token is missing",
+            "TUSHARE_TOKEN",
+        ),
+        (
+            TushareRequestError("Unable to reach Tushare API at http://example.invalid: Name or service not known"),
+            "network_unreachable",
+            "could not be reached",
+            "network access",
+        ),
+        (
+            TushareConfigurationError(
+                "Tushare permission error for trade_cal: 权限不足. Trade calendar access is unavailable for this token."
+            ),
+            "trade_calendar_inaccessible",
+            "trade calendar access is unavailable",
+            "trade_cal",
+        ),
+        (
+            TushareConfigurationError(
+                "Tushare permission error for stk_mins: 权限不足. Minute-data permission is missing for this token."
+            ),
+            "minute_permission_missing",
+            "minute-data permission is missing",
+            "minute-data permission",
+        ),
+    ],
+)
+def test_tushare_planning_blocker_classifier_identifies_common_blockers(
+    exc: Exception,
+    expected_key: str,
+    headline_fragment: str,
+    step_fragment: str,
+) -> None:
+    from data.providers.tushare_readiness import classify_tushare_planning_blocker
+
+    blocker = classify_tushare_planning_blocker(exc)
+
+    assert blocker is not None
+    assert blocker.key == expected_key
+    assert headline_fragment in blocker.headline.lower()
+    assert any(step_fragment.lower() in step.lower() for step in blocker.next_steps)
+
+
+def test_backfill_cli_reports_actionable_dry_run_blocker(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts import sync_tushare_backfill as cli
+
+    monkeypatch.setattr(
+        cli,
+        "run_backfill",
+        lambda **kwargs: (_ for _ in ()).throw(
+            TushareConfigurationError(
+                "Tushare permission error for stk_mins: 权限不足. Minute-data permission is missing for this token."
+            )
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["sync_tushare_backfill.py", "--start-date", "2026-03-01", "--end-date", "2026-03-28", "--dry-run"])
+
+    assert cli.main() == 2
+    stderr = capsys.readouterr().err
+    assert "Backfill dry-run planning blocked" in stderr
+    assert "minute-data permission is missing" in stderr.lower()
+    assert "Tushare token" not in stderr
+
+
+def test_refresh_cli_reports_actionable_dry_run_blocker(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts import sync_tushare_refresh as cli
+
+    monkeypatch.setattr(
+        cli,
+        "run_refresh",
+        lambda **kwargs: (_ for _ in ()).throw(
+            TushareRequestError("Unable to reach Tushare API at http://example.invalid: Name or service not known")
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["sync_tushare_refresh.py", "--workflow", "daily-refresh", "--dry-run"])
+
+    assert cli.main() == 2
+    stderr = capsys.readouterr().err
+    assert "Refresh dry-run planning blocked" in stderr
+    assert "could not be reached" in stderr.lower()
+    assert "network access" in stderr.lower()
