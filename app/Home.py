@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.ui.data_access import load_home_page_data  # noqa: E402
+from app.ui.data_access import is_passing_validation_status, load_home_page_data  # noqa: E402
 
 
 st.set_page_config(page_title="Quantlab Workbench", layout="wide")
@@ -46,6 +46,18 @@ completed_runs = [run for run in home.recent_runs if str(run.status).lower() == 
 
 st.title("Quantlab Workbench")
 st.caption("Artifact-first research console with explicit execution and app-local run persistence.")
+
+readiness = home.readiness_summary
+if readiness.status == "success":
+    st.success(f"{readiness.headline} {readiness.body}")
+elif readiness.status == "warning":
+    st.warning(f"{readiness.headline} {readiness.body}")
+else:
+    st.info(f"{readiness.headline} {readiness.body}")
+if readiness.next_steps:
+    st.markdown("**Next steps**")
+    for step in readiness.next_steps:
+        st.markdown(f"- {step}")
 
 metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
 with metric_col1:
@@ -85,7 +97,7 @@ with focus_col3:
         st.info("No validation summary is available yet.")
     else:
         failing = home.validation_summary.recent_results
-        failing = failing[failing["status"].astype(str).str.lower() != "passed"]
+        failing = failing[~failing["status"].astype(str).str.lower().map(is_passing_validation_status)]
         st.metric("Recent issues", len(failing))
         st.metric("Shared runs", home.shared_run_count)
 

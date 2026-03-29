@@ -142,6 +142,14 @@ class DataHealthSnapshot:
 
 
 @dataclass(slots=True)
+class ReadinessSummary:
+    status: str
+    headline: str
+    body: str
+    next_steps: list[str]
+
+
+@dataclass(slots=True)
 class ScanBatchSummary:
     scan_batch_id: str
     strategy_name: str
@@ -168,6 +176,7 @@ class HomePageData:
     recent_runs: list[RunSummary]
     validation_results: list[ValidationResultItem]
     validation_summary: ValidationSummary | None
+    readiness_summary: ReadinessSummary
     default_template: TemplateSummary
     latest_saved_template: TemplateSummary | None
     data_health_note: str
@@ -388,6 +397,8 @@ def load_latest_validation_summary(paths: AppPaths | None = None) -> ValidationS
     )
     if recent.empty:
         return None
+    recent = recent.copy()
+    recent["status"] = recent["status"].map(_canonical_validation_status)
     status_counts = (
         recent.groupby("status", dropna=False)
         .size()
@@ -590,10 +601,17 @@ def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Pa
                 )
         recent_runs = load_recent_runs(limit=limit, paths=paths)
         run_count = len(load_recent_runs(limit=100, paths=paths))
+        provider_capabilities = load_provider_capabilities(paths=paths)
+        file_manifest = load_file_manifest_summary(paths=paths)
         return HomePageData(
             recent_runs=recent_runs,
             validation_results=validation_results,
             validation_summary=validation_summary,
+            readiness_summary=build_home_readiness_summary(
+                validation_summary=validation_summary,
+                provider_capabilities=provider_capabilities,
+                file_manifest=file_manifest,
+            ),
             default_template=default_template_summary(),
             latest_saved_template=load_latest_saved_template(paths=paths),
             data_health_note=latest_data_health_note(paths=paths),
@@ -613,6 +631,11 @@ def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Pa
         recent_runs=recent_runs,
         validation_results=data_health.validation_results,
         validation_summary=data_health.validation_summary,
+        readiness_summary=build_home_readiness_summary(
+            validation_summary=data_health.validation_summary,
+            provider_capabilities=data_health.provider_capabilities,
+            file_manifest=data_health.file_manifest,
+        ),
         default_template=default_template_summary(),
         latest_saved_template=load_latest_saved_template(root=root),
         data_health_note=data_health.note,
@@ -648,11 +671,91 @@ def latest_data_health_note(paths: AppPaths | None = None) -> str:
     if summary is None:
         return "No validation results are available yet."
     failed = summary.recent_results[
-        ~summary.recent_results["status"].astype(str).str.lower().isin({"pass", "passed"})
+        ~summary.recent_results["status"].astype(str).str.lower().map(is_passing_validation_status)
     ]
     if failed.empty:
         return "Latest validation samples are clean."
     return f"{len(failed)} recent validation checks are not passing."
+
+
+def build_home_readiness_summary(
+    *,
+    validation_summary: ValidationSummary | None,
+    provider_capabilities: list[ProviderCapabilitySummary],
+    file_manifest: list[FileManifestSummary],
+) -> ReadinessSummary:
+    if not provider_capabilities:
+        return ReadinessSummary(
+            status="warning",
+            headline="No real provider data is available yet.",
+            body=(
+                "The workbench can still browse demo artifacts, but the provider registry does not have "
+                "any capability rows yet."
+            ),
+            next_steps=[
+                "Seed demo data for offline exploration.",
+                "Add provider credentials or a local bundle, then run a sync/backfill.",
+                "Return to Data Health after the first publish.",
+            ],
+        )
+
+    supports_minute_bars = any(item.supports_minute_bars for item in provider_capabilities)
+    supports_security_status_history = any(
+        item.supports_security_status_history for item in provider_capabilities
+    )
+
+    if not supports_minute_bars:
+        return ReadinessSummary(
+            status="warning",
+            headline="Provider access is not ready for minute-bar research.",
+            body=(
+                "The configured provider is registered, but it does not currently advertise minute bars."
+            ),
+            next_steps=[
+                "Check the provider token, API key, or local bundle configuration.",
+                "Publish minute bars before trying a live-data backtest.",
+            ],
+        )
+
+    if not supports_security_status_history:
+        return ReadinessSummary(
+            status="warning",
+            headline="Provider permissions are missing security-status history.",
+            body=(
+                "Minute bars are available, but status-history-driven preflight and replay checks still "
+                "need that dataset."
+            ),
+            next_steps=[
+                "Enable security-status history in the provider account or adapter.",
+                "Run validation again after the next publish.",
+            ],
+        )
+
+    if validation_summary is None or not file_manifest:
+        return ReadinessSummary(
+            status="info",
+            headline="Provider looks ready, but no published datasets are visible yet.",
+            body=(
+                "Capability rows are present, but the local registry still has no published data to browse."
+            ),
+            next_steps=[
+                "Run the sync or backfill flow to publish data.",
+                "Use the seeded demo state if you want to explore the UI now.",
+            ],
+        )
+
+    return ReadinessSummary(
+        status="success",
+        headline="Provider readiness looks good.",
+        body=(
+            "Minute bars and security-status history are available, and the local registry already has "
+            "published datasets."
+        ),
+        next_steps=[
+            "Open Single Backtest, Parameter Scan, or Replay Diagnostics as needed.",
+            "Use Data Health to review validation samples.",
+        ],
+    )
 
 
 def _read_scan_batch_result(path: Path) -> ScanBatchResult | None:
@@ -697,6 +800,17 @@ def _run_summaries_from_frame(frame: pd.DataFrame, paths: AppPaths, source_label
 
 def _run_sort_key(summary: RunSummary) -> datetime:
     return summary.completed_at or summary.created_at or datetime.min
+
+
+def _canonical_validation_status(value: Any) -> str:
+    status = str(value).strip().lower()
+    if status == "passed":
+        return "pass"
+    return status
+
+
+def is_passing_validation_status(value: str) -> bool:
+    return value in {"pass", "passed"}
 
 
 def _safe_float(value: Any) -> float | None:

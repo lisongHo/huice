@@ -107,10 +107,7 @@ class TushareHttpClient:
                     "Set TUSHARE_TOKEN or provide it in the config file."
                 )
             if code == 2002 or "权限" in message or "积分" in message:
-                raise TushareConfigurationError(
-                    f"Tushare permission error for {api_name}: {message}. "
-                    "Historical stock minutes require an activated token and separate minute-data permission."
-                )
+                raise TushareConfigurationError(_permission_error_message(api_name, message))
             raise TushareRequestError(f"Tushare request failed for {api_name}: {message}")
 
         data = payload_object.get("data") or {}
@@ -438,6 +435,23 @@ def _coalesce_str(*values: object) -> str | None:
         if text:
             return text
     return None
+
+
+def _permission_error_message(api_name: str, message: str) -> str:
+    if api_name == "trade_cal":
+        return (
+            f"Tushare permission error for {api_name}: {message}. "
+            "Trade calendar access is unavailable for this token."
+        )
+    if api_name == "stk_mins":
+        return (
+            f"Tushare permission error for {api_name}: {message}. "
+            "Minute-data permission is missing for this token."
+        )
+    return (
+        f"Tushare permission error for {api_name}: {message}. "
+        "Check Tushare Pro token permissions for this endpoint."
+    )
 
 
 def _normalize_minute_timestamp_series(values: pd.Series) -> pd.Series:

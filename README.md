@@ -42,12 +42,25 @@ When you connect a real upstream provider, keep its credentials out of git and t
 
 If those credentials are missing, the local seed and backtest flows should still work. Real-provider refresh/backfill jobs, once you add them, will require the provider's token or API key plus enough wall-clock time to fetch historical data.
 
+The Home page now includes a readiness preflight that tells you whether real provider data is published, whether permissions are missing, and which next step to take. If the banner says the provider is not ready, seed demo data for offline exploration or finish the provider sync/backfill before expecting live-data results.
+
+Before running a full sync, use the lightweight Tushare preflight:
+
+```bash
+.venv/bin/python -m scripts.tushare_preflight --reference-date 2026-03-28
+```
+
+It checks whether the local config is visible plus whether `trade_cal`, `stock_basic`, and `stk_mins` are accessible for the current token.
+
 ## UI Pages
 
-The Streamlit workbench currently ships with two pages:
+The Streamlit workbench currently ships with five pages:
 
-- `Home` at `app/Home.py`: shows the template defaults, latest validation summary, recent runs, and workspace paths.
+- `Home` at `app/Home.py`: shows the readiness preflight, template defaults, latest validation summary, recent runs, scan batches, experiment-library entries, and workspace paths.
 - `Single Backtest` at `app/pages/1_Single_Backtest.py`: prepares an explicit run request snapshot and browses persisted artifacts from completed runs.
+- `Data Health` at `app/pages/2_Data_Health.py`: reads validation samples, file manifests, and provider capability rows from the registry.
+- `Parameter Scan` at `app/pages/3_Parameter_Scan.py`: prepares scan grids explicitly, checks for a scan runner hook, and browses persisted scan batches.
+- `Replay Diagnostics` at `app/pages/4_Replay_Diagnostics.py`: inspects saved run artifacts, equity curves, and trade-level diagnostics.
 
 The UI is intentionally request-driven. Changing widgets should prepare a draft; execution happens only from explicit script or button paths.
 
@@ -58,12 +71,6 @@ The UI is intentionally request-driven. Changing widgets should prepare a draft;
 - built-in T-1 daily-feature strategy with near-close and next-open control execution
 - A-share rule handling for T+1, ST filter, suspension, price limits, fees, taxes, slippage, board lots, and no overlapping entries
 - immutable run artifacts: config, metrics, equity, drawdown, trades, annual returns
-- Streamlit multi-page workbench with recent runs and single-backtest result browsing
+- Streamlit multi-page workbench with Home, Data Health, Single Backtest, Parameter Scan, and Replay Diagnostics pages
 - local demo seed and single-run scripts that do not require provider credentials
-
-## Deferred to v0.2+
-
-- parameter scan UI
-- replay diagnostics pages
-- richer data quality dashboards
-- alternate upstream provider adapters
+- readiness/preflight messaging for real-data setup

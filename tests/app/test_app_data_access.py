@@ -120,3 +120,61 @@ def test_latest_validation_summary_aggregates_status_and_severity_counts(tmp_pat
         "missing_security_master",
         "no_overlapping_effective_windows",
     ]
+
+
+def test_latest_validation_summary_treats_pass_and_passed_as_the_same_status(tmp_path: Path) -> None:
+    from app.ui.data_access import latest_data_health_note, load_latest_validation_summary
+
+    paths = _paths(tmp_path)
+    with duckdb.connect(str(paths.registry_path)) as connection:
+        connection.execute(
+            """
+            insert into validation_results (
+                validation_run_id, dataset_name, check_name, severity, status, details
+            ) values
+                ('vr-101', 'minute_bars', 'duplicate_minute_key', 'error', 'failed', 'duplicate minute key'),
+                ('vr-102', 'minute_bars', 'illegal_ohlc', 'error', 'pass', 'ok'),
+                ('vr-103', 'security_status_history', 'no_overlapping_effective_windows', 'warning', 'passed', 'dated history is queryable')
+            """
+        )
+
+    summary = load_latest_validation_summary(paths)
+
+    assert summary is not None
+    assert dict(zip(summary.status_counts["status"], summary.status_counts["count"])) == {
+        "pass": 2,
+        "failed": 1,
+    }
+    assert latest_data_health_note(paths) == "1 recent validation checks are not passing."
+
+
+def test_home_page_loader_reports_preflight_when_real_data_is_missing(tmp_path: Path) -> None:
+    from app.ui.data_access import load_home_page_data
+
+    paths = _paths(tmp_path)
+
+    home_data = load_home_page_data(paths, limit=5)
+
+    assert home_data.readiness_summary.status == "warning"
+    assert "No real provider data" in home_data.readiness_summary.headline
+    assert any("seed demo data" in step.lower() for step in home_data.readiness_summary.next_steps)
+
+
+def test_home_page_loader_reports_missing_provider_permissions(tmp_path: Path) -> None:
+    from app.ui.data_access import load_home_page_data
+
+    paths = _paths(tmp_path)
+    with duckdb.connect(str(paths.registry_path)) as connection:
+        connection.execute(
+            """
+            insert into provider_capabilities (
+                provider_name, supports_minute_bars, supports_security_status_history, supports_price_limits, supports_suspensions
+            ) values
+                ('tushare_pro', true, false, false, false)
+            """
+        )
+
+    home_data = load_home_page_data(paths, limit=5)
+
+    assert home_data.readiness_summary.status == "warning"
+    assert "security-status history" in home_data.readiness_summary.headline.lower()
