@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import duckdb
 
@@ -178,3 +180,131 @@ def test_home_page_loader_reports_missing_provider_permissions(tmp_path: Path) -
 
     assert home_data.readiness_summary.status == "warning"
     assert "security-status history" in home_data.readiness_summary.headline.lower()
+
+
+def test_latest_saved_readiness_summary_infers_permission_gap_from_raw_tushare_payload(tmp_path: Path) -> None:
+    from app.ui.data_access import load_latest_saved_readiness_summary
+
+    paths = _paths(tmp_path)
+    readiness_dir = paths.local_state_dir / "readiness"
+    readiness_dir.mkdir(parents=True, exist_ok=True)
+    (readiness_dir / "latest.json").write_text(
+        """
+        {
+          "config": {
+            "config_path": "/tmp/provider.toml",
+            "api_url": "http://api.tushare.pro",
+            "token_visible": true,
+            "reference_date": "2026-03-29"
+          },
+          "endpoint_probes": [
+            {"api_name": "trade_cal", "status": "ok", "row_count": 1},
+            {"api_name": "stock_basic", "status": "ok", "row_count": 1},
+            {
+              "api_name": "stk_mins",
+              "status": "error",
+              "selected_symbol": "000001",
+              "error_type": "TushareConfigurationError",
+              "error_message": "Tushare permission error for stk_mins: 权限不足. Minute-data permission is missing for this token."
+            }
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    summary = load_latest_saved_readiness_summary(paths=paths)
+
+    assert summary is not None
+    assert summary.status == "warning"
+    assert "minute" in summary.headline.lower()
+    assert any("permission" in step.lower() for step in summary.next_steps)
+
+
+def test_latest_readiness_artifact_prefers_most_recent_saved_file(tmp_path: Path) -> None:
+    from app.ui.data_access import load_latest_readiness_artifact
+
+    paths = AppPaths.from_workspace(tmp_path)
+    readiness_dir = paths.local_state_dir / "readiness"
+    readiness_dir.mkdir(parents=True, exist_ok=True)
+
+    older_path = readiness_dir / "2026-03-27.json"
+    newer_path = readiness_dir / "2026-03-28.json"
+    older_path.write_text(
+        """
+        {
+          "status": "warning",
+          "headline": "Older saved readiness",
+          "body": "This should not be selected.",
+          "next_steps": ["Ignore me"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    newer_path.write_text(
+        """
+        {
+          "status": "success",
+          "headline": "Latest saved readiness",
+          "body": "This should be selected.",
+          "next_steps": ["Use the latest artifact"]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    older_mtime = datetime(2026, 3, 27, 9, 0, 0).timestamp()
+    newer_mtime = datetime(2026, 3, 28, 9, 0, 0).timestamp()
+    os.utime(older_path, (older_mtime, older_mtime))
+    os.utime(newer_path, (newer_mtime, newer_mtime))
+
+    artifact = load_latest_readiness_artifact(paths)
+
+    assert artifact is not None
+    assert artifact.path.endswith("2026-03-28.json")
+    assert artifact.summary.headline == "Latest saved readiness"
+    assert artifact.summary.status == "success"
+    assert artifact.summary.next_steps == ["Use the latest artifact"]
+
+
+def test_home_page_loader_prefers_saved_readiness_artifact(tmp_path: Path, monkeypatch) -> None:
+    from app.ui import data_access
+
+    paths = _paths(tmp_path)
+    fake_artifact = SimpleNamespace(
+        summary=SimpleNamespace(
+            status="success",
+            headline="Saved readiness artifact",
+            body="Loaded from shared state.",
+            next_steps=["Open the provider readiness page."],
+        )
+    )
+
+    monkeypatch.setattr(data_access, "load_latest_readiness_artifact", lambda *args, **kwargs: fake_artifact)
+    monkeypatch.setattr(
+        data_access,
+        "build_home_readiness_summary",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("generic readiness summary should not be used")),
+    )
+    monkeypatch.setattr(data_access, "load_latest_validation_summary", lambda paths=None: None)
+    monkeypatch.setattr(data_access, "load_recent_runs", lambda limit=10, paths=None, source_label="app": [])
+    monkeypatch.setattr(data_access, "load_recent_runs_catalog", lambda limit=10, root=None: [])
+    monkeypatch.setattr(data_access, "load_provider_capabilities", lambda paths=None: [])
+    monkeypatch.setattr(data_access, "load_file_manifest_summary", lambda paths=None: [])
+    monkeypatch.setattr(data_access, "default_template_summary", lambda: SimpleNamespace())
+    monkeypatch.setattr(data_access, "load_latest_saved_template", lambda paths=None, root=None: None)
+    monkeypatch.setattr(data_access, "latest_data_health_note", lambda paths=None: "No validation results are available yet.")
+    monkeypatch.setattr(data_access, "load_scan_batches", lambda limit=10, root=None: [])
+    monkeypatch.setattr(data_access, "load_experiment_library_entries", lambda root=None: [])
+    monkeypatch.setattr(data_access, "load_data_health_snapshot", lambda root=None: SimpleNamespace(
+        validation_results=[],
+        validation_summary=None,
+        note="No validation results are available yet.",
+        file_manifest=[],
+        provider_capabilities=[],
+    ))
+
+    home_data = data_access.load_home_page_data(paths=paths, limit=5)
+
+    assert home_data.readiness_summary.headline == "Saved readiness artifact"
+    assert home_data.readiness_summary.status == "success"

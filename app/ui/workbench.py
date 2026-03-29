@@ -22,6 +22,12 @@ SCAN_RUNNER_CANDIDATES: tuple[tuple[str, str], ...] = (
     ("scripts.run_parameter_scan", "run_parameter_scan"),
 )
 
+PROVIDER_READINESS_RUNNER_CANDIDATES: tuple[tuple[str, str], ...] = (
+    ("reports", "run_provider_readiness_check"),
+    ("reports.readiness", "run_provider_readiness_check"),
+    ("scripts.provider_readiness", "run_provider_readiness_check"),
+)
+
 
 @dataclass(slots=True)
 class BacktestExecutionResult:
@@ -40,6 +46,22 @@ class ScanRunnerProbe:
     message: str
     runner_name: str | None = None
     runner: Callable[..., Any] | None = None
+
+
+@dataclass(slots=True)
+class ProviderReadinessProbe:
+    available: bool
+    message: str
+    runner_name: str | None = None
+    runner: Callable[..., Any] | None = None
+
+
+@dataclass(slots=True)
+class ProviderReadinessExecutionResult:
+    success: bool
+    message: str
+    payload: Any | None = None
+    artifact_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -161,6 +183,26 @@ def detect_scan_runner() -> ScanRunnerProbe:
     )
 
 
+def detect_provider_readiness_runner() -> ProviderReadinessProbe:
+    for module_name, function_name in PROVIDER_READINESS_RUNNER_CANDIDATES:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+        runner = getattr(module, function_name, None)
+        if callable(runner):
+            return ProviderReadinessProbe(
+                available=True,
+                message=f"Detected provider readiness hook: {module_name}.{function_name}",
+                runner_name=f"{module_name}.{function_name}",
+                runner=runner,
+            )
+    return ProviderReadinessProbe(
+        available=False,
+        message="No provider readiness runner hook is available yet. The page can still browse saved readiness artifacts.",
+    )
+
+
 def execute_parameter_scan(
     request: dict[str, Any],
     root: Path | None = None,
@@ -228,6 +270,49 @@ def execute_parameter_scan(
         message=f"Parameter scan hook signature is unsupported: {last_error}",
         paths=paths,
         used_seed_demo=used_seed_demo,
+    )
+
+
+def execute_provider_readiness_check(root: Path | None = None) -> ProviderReadinessExecutionResult:
+    probe = detect_provider_readiness_runner()
+    if not probe.available or probe.runner is None:
+        return ProviderReadinessExecutionResult(
+            success=False,
+            message=probe.message,
+        )
+
+    shared_paths = build_shared_paths(root)
+    attempts: tuple[Callable[[], Any], ...] = (
+        lambda: probe.runner(),
+        lambda: probe.runner(shared_paths),
+        lambda: probe.runner(paths=shared_paths),
+    )
+    last_error: Exception | None = None
+    for attempt in attempts:
+        try:
+            payload = attempt()
+            return ProviderReadinessExecutionResult(
+                success=True,
+                message="Provider readiness check completed.",
+                payload=payload,
+                artifact_path=str(shared_paths.local_state_dir / "readiness" / "latest.json"),
+            )
+        except TypeError as exc:
+            last_error = exc
+            continue
+        except Exception as exc:
+            return ProviderReadinessExecutionResult(
+                success=False,
+                message=f"Provider readiness check failed: {exc}",
+            )
+
+    return ProviderReadinessExecutionResult(
+        success=False,
+        message=(
+            "Provider readiness runner signature was not recognized."
+            if last_error is None
+            else f"Provider readiness runner signature was not recognized: {last_error}"
+        ),
     )
 
 

@@ -130,3 +130,45 @@ def test_tushare_preflight_cli_prints_json(monkeypatch: pytest.MonkeyPatch, caps
     payload = json.loads(capsys.readouterr().out)
     assert payload["config"]["reference_date"] == "2026-03-28"
     assert payload["endpoint_probes"][2]["api_name"] == "stk_mins"
+
+
+def test_tushare_preflight_cli_persists_latest_readiness_payload_and_prints_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from data.providers.tushare_readiness import (
+        TushareEndpointProbeResult,
+        TushareReadinessConfig,
+        TushareReadinessReport,
+        tushare_readiness_to_dict,
+    )
+    from scripts import tushare_preflight as cli
+
+    report = TushareReadinessReport(
+        config=TushareReadinessConfig(
+            config_path="/tmp/provider.toml",
+            api_url="http://example.invalid",
+            token_visible=True,
+            reference_date="2026-03-28",
+        ),
+        endpoint_probes=(
+            TushareEndpointProbeResult(api_name="trade_cal", status="ok", row_count=1),
+        ),
+    )
+    persisted: dict[str, object] = {}
+
+    def _fake_persist(paths, payload):
+        persisted["paths"] = paths
+        persisted["payload"] = payload
+        return "/tmp/latest.json"
+
+    monkeypatch.setattr(cli, "collect_tushare_readiness", lambda **kwargs: report)
+    monkeypatch.setattr(cli, "persist_latest_readiness_payload", _fake_persist, raising=False)
+    monkeypatch.setattr(sys, "argv", ["tushare_preflight.py", "--reference-date", "2026-03-28", "--persist"])
+
+    assert cli.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload == json.loads(json.dumps(tushare_readiness_to_dict(report), default=str))
+    assert persisted["payload"] == tushare_readiness_to_dict(report)
+    assert persisted["paths"] is not None

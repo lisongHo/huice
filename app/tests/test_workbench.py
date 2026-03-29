@@ -111,6 +111,16 @@ def test_detect_scan_runner_reports_available_hook() -> None:
     assert "run_parameter_scan" in probe.message
 
 
+def test_detect_provider_readiness_runner_reports_available_hook() -> None:
+    from app.ui.workbench import detect_provider_readiness_runner
+
+    probe = detect_provider_readiness_runner()
+
+    assert probe.available is True
+    assert probe.runner_name in {"reports.run_provider_readiness_check", "reports.artifacts.run_provider_readiness_check"}
+    assert "run_provider_readiness_check" in probe.message
+
+
 def test_load_experiment_library_entries_reads_app_local_structure(tmp_path: Path) -> None:
     from app.ui.data_access import load_experiment_library_entries
 

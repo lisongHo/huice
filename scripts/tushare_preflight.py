@@ -9,6 +9,8 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
+from quantlab.config import AppPaths
+from reports.artifacts import persist_latest_readiness_payload
 from data.providers.tushare_readiness import collect_tushare_readiness, tushare_readiness_to_dict
 
 
@@ -21,13 +23,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--reference-date",
         help="Reference date in YYYY-MM-DD format. Defaults to today.",
     )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persist the latest readiness payload to .quantlab/readiness/latest.json.",
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     report = collect_tushare_readiness(config_path=args.config, reference_date=args.reference_date)
-    print(json.dumps(tushare_readiness_to_dict(report), indent=2, sort_keys=True, default=str))
+    payload = tushare_readiness_to_dict(report)
+    if args.persist:
+        persist_latest_readiness_payload(AppPaths.from_workspace(WORKSPACE_ROOT), payload)
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     return 0
 
 

@@ -150,6 +150,14 @@ class ReadinessSummary:
 
 
 @dataclass(slots=True)
+class ReadinessArtifact:
+    path: str
+    modified_at: datetime | None
+    payload: dict[str, Any] | list[Any] | str
+    summary: ReadinessSummary
+
+
+@dataclass(slots=True)
 class ScanBatchSummary:
     scan_batch_id: str
     strategy_name: str
@@ -229,6 +237,148 @@ def default_template_summary() -> TemplateSummary:
             strategy_params=params,
         ),
     )
+
+
+def _readiness_root(paths: AppPaths | None = None, root: Path | None = None) -> Path:
+    if paths is not None:
+        return paths.local_state_dir / "readiness"
+    return get_shared_paths(root).local_state_dir / "readiness"
+
+
+def _coerce_readiness_summary(payload: dict[str, Any] | list[Any] | str, *, path: Path) -> ReadinessSummary:
+    if isinstance(payload, dict):
+        candidate = payload
+        if isinstance(candidate.get("summary"), dict):
+            candidate = candidate["summary"]
+        elif isinstance(candidate.get("readiness"), dict):
+            candidate = candidate["readiness"]
+
+        endpoint_probes = payload.get("endpoint_probes")
+        config = payload.get("config")
+        if isinstance(endpoint_probes, list) and isinstance(config, dict):
+            token_visible = bool(config.get("token_visible"))
+            errors = [item for item in endpoint_probes if isinstance(item, dict) and str(item.get("status", "")).lower() == "error"]
+            if not token_visible:
+                return ReadinessSummary(
+                    status="warning",
+                    headline="Provider readiness check cannot see a token yet.",
+                    body="The latest saved preflight says the provider token is not visible to this workspace.",
+                    next_steps=[
+                        "Set TUSHARE_TOKEN or fill configs/provider.toml.",
+                        "Run the readiness check again after updating credentials.",
+                    ],
+                )
+            if errors:
+                combined_error_text = " ".join(str(item.get("error_message", "")) for item in errors)
+                if "minute-data permission is missing" in combined_error_text.lower():
+                    return ReadinessSummary(
+                        status="warning",
+                        headline="Latest provider readiness check found missing minute-data permission.",
+                        body="The token is visible, but the saved preflight still cannot access stock minute history.",
+                        next_steps=[
+                            "Enable the Tushare minute-data permission for this token.",
+                            "Run the readiness check again after permissions are updated.",
+                        ],
+                    )
+                if "unable to reach tushare api" in combined_error_text.lower():
+                    return ReadinessSummary(
+                        status="warning",
+                        headline="Latest provider readiness check could not reach the upstream API.",
+                        body="The saved preflight shows a network or DNS failure rather than a local configuration issue.",
+                        next_steps=[
+                            "Retry the readiness check with network access.",
+                            "If it still fails, verify the configured API URL and local network path.",
+                        ],
+                    )
+                return ReadinessSummary(
+                    status="warning",
+                    headline="Latest provider readiness check found upstream access gaps.",
+                    body="The token is visible, but one or more required endpoints still returned errors.",
+                    next_steps=[
+                        "Review the saved endpoint probe errors on the Provider Readiness page.",
+                        "Grant the missing Tushare permissions, then rerun the readiness check.",
+                    ],
+                )
+            return ReadinessSummary(
+                status="success",
+                headline="Latest provider readiness check passed.",
+                body="The saved preflight can see the token and the probed endpoints responded successfully.",
+                next_steps=[
+                    "Run the sync or backfill flow to publish data.",
+                    "Open Data Health after the first real publish.",
+                ],
+            )
+
+        next_steps = candidate.get("next_steps")
+        if not isinstance(next_steps, list):
+            next_steps = payload.get("next_steps") if isinstance(payload.get("next_steps"), list) else []
+        return ReadinessSummary(
+            status=str(candidate.get("status", payload.get("status", "info"))),
+            headline=str(
+                candidate.get(
+                    "headline",
+                    payload.get("headline", "Latest provider readiness artifact is available."),
+                )
+            ),
+            body=str(
+                candidate.get(
+                    "body",
+                    payload.get("body", f"Loaded persisted readiness data from `{path}`."),
+                )
+            ),
+            next_steps=[str(step) for step in next_steps],
+        )
+
+    return ReadinessSummary(
+        status="info",
+        headline="Latest provider readiness artifact is available.",
+        body=f"Loaded persisted readiness data from `{path}`.",
+        next_steps=[],
+    )
+
+
+def load_latest_readiness_artifact(
+    paths: AppPaths | None = None,
+    root: Path | None = None,
+) -> ReadinessArtifact | None:
+    readiness_root = _readiness_root(paths=paths, root=root)
+    if not readiness_root.exists():
+        return None
+
+    candidates = [path for path in readiness_root.rglob("*") if path.is_file()]
+    if not candidates:
+        return None
+
+    latest_path = max(
+        candidates,
+        key=lambda item: (item.stat().st_mtime, item.as_posix()),
+    )
+    if latest_path.suffix.lower() == ".json":
+        payload = _read_json_file(latest_path)
+        if payload is None:
+            return None
+    elif latest_path.suffix.lower() == ".csv":
+        payload = _read_frame(latest_path).to_dict(orient="records")
+    elif latest_path.suffix.lower() == ".parquet":
+        payload = _read_frame(latest_path).to_dict(orient="records")
+    else:
+        payload = latest_path.read_text(encoding="utf-8")
+
+    summary = _coerce_readiness_summary(payload, path=latest_path)
+    return ReadinessArtifact(
+        path=str(latest_path),
+        modified_at=datetime.fromtimestamp(latest_path.stat().st_mtime),
+        payload=payload,
+        summary=summary,
+    )
+
+
+def load_latest_saved_readiness_summary(
+    paths: AppPaths | None = None,
+    root: Path | None = None,
+) -> ReadinessSummary | None:
+    artifact = load_latest_readiness_artifact(paths=paths, root=root)
+    return None if artifact is None else artifact.summary
 
 
 def load_latest_saved_template(paths: AppPaths | None = None, root: Path | None = None) -> TemplateSummary | None:
@@ -584,6 +734,7 @@ def load_experiment_library_entries(root: Path | None = None) -> list[Experiment
 
 
 def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Path | None = None) -> HomePageData:
+    saved_readiness_summary = load_latest_saved_readiness_summary(paths=paths, root=root)
     if paths is not None:
         validation_summary = load_latest_validation_summary(paths=paths)
         validation_results: list[ValidationResultItem] = []
@@ -607,10 +758,14 @@ def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Pa
             recent_runs=recent_runs,
             validation_results=validation_results,
             validation_summary=validation_summary,
-            readiness_summary=build_home_readiness_summary(
-                validation_summary=validation_summary,
-                provider_capabilities=provider_capabilities,
-                file_manifest=file_manifest,
+            readiness_summary=(
+                saved_readiness_summary
+                if saved_readiness_summary is not None
+                else build_home_readiness_summary(
+                    validation_summary=validation_summary,
+                    provider_capabilities=provider_capabilities,
+                    file_manifest=file_manifest,
+                )
             ),
             default_template=default_template_summary(),
             latest_saved_template=load_latest_saved_template(paths=paths),
@@ -631,10 +786,14 @@ def load_home_page_data(paths: AppPaths | None = None, limit: int = 10, root: Pa
         recent_runs=recent_runs,
         validation_results=data_health.validation_results,
         validation_summary=data_health.validation_summary,
-        readiness_summary=build_home_readiness_summary(
-            validation_summary=data_health.validation_summary,
-            provider_capabilities=data_health.provider_capabilities,
-            file_manifest=data_health.file_manifest,
+        readiness_summary=(
+            saved_readiness_summary
+            if saved_readiness_summary is not None
+            else build_home_readiness_summary(
+                validation_summary=data_health.validation_summary,
+                provider_capabilities=data_health.provider_capabilities,
+                file_manifest=data_health.file_manifest,
+            )
         ),
         default_template=default_template_summary(),
         latest_saved_template=load_latest_saved_template(root=root),

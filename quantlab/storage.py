@@ -20,6 +20,7 @@ def ensure_state_dirs(paths: AppPaths) -> None:
         paths.local_state_dir,
         paths.lake_root,
         paths.lake_root / "minute_bars",
+        readiness_root(paths),
         paths.runs_root,
     ):
         directory.mkdir(parents=True, exist_ok=True)
@@ -35,3 +36,11 @@ def minute_partition_path(paths: AppPaths, trade_date: str) -> Path:
 
 def run_dir(paths: AppPaths, run_id: str) -> Path:
     return paths.runs_root / run_id
+
+
+def readiness_root(paths: AppPaths) -> Path:
+    return paths.local_state_dir / "readiness"
+
+
+def readiness_artifact_path(paths: AppPaths) -> Path:
+    return readiness_root(paths) / "latest.json"

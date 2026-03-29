@@ -10,6 +10,7 @@ import duckdb
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from data.providers.tushare_readiness import collect_tushare_readiness, tushare_readiness_to_dict
 from quantlab.config import AppPaths
 from quantlab.registry import bootstrap_registry
 from quantlab.schemas import (
@@ -23,7 +24,7 @@ from quantlab.schemas import (
     RunStatus,
     TradeRecord,
 )
-from quantlab.storage import ARTIFACT_FILE_NAMES, ensure_state_dirs, run_dir
+from quantlab.storage import ARTIFACT_FILE_NAMES, ensure_state_dirs, readiness_artifact_path, run_dir
 
 _REPLAY_DIAGNOSTICS_FILE_NAME = "replay_diagnostics.json"
 _TRADE_SLICES_FILE_NAME = "trade_slices.parquet"
@@ -293,3 +294,29 @@ def load_replay_diagnostic_payload(paths: AppPaths, run_id: str) -> ReplayDiagno
     if not payload_path.exists():
         return None
     return ReplayDiagnosticPayload.model_validate(json.loads(payload_path.read_text()))
+
+
+def persist_latest_readiness_payload(paths: AppPaths, payload: dict[str, Any]) -> Path:
+    ensure_state_dirs(paths)
+    artifact_path = readiness_artifact_path(paths)
+    artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    return artifact_path
+
+
+def load_latest_readiness_payload(paths: AppPaths) -> dict[str, Any] | None:
+    artifact_path = readiness_artifact_path(paths)
+    if not artifact_path.exists():
+        return None
+    return json.loads(artifact_path.read_text())
+
+
+def run_provider_readiness_check(
+    paths: AppPaths,
+    *,
+    config_path: Path | None = None,
+    reference_date: str | None = None,
+) -> dict[str, Any]:
+    report = collect_tushare_readiness(config_path=config_path, reference_date=reference_date)
+    payload = tushare_readiness_to_dict(report)
+    persist_latest_readiness_payload(paths, payload)
+    return payload
